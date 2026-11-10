@@ -325,7 +325,9 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             try await Task.sleep(for: .milliseconds(100))
         }
         pauseAll()
-        while !active.isEmpty {
+        // Deleting a record removes it from active immediately, but its physical
+        // transfer still owns a slot until the completion callback closes it.
+        while !active.isEmpty || !transferSlots.isEmpty {
             guard Date() < deadline else { throw DownloadStorageError.busy }
             try await Task.sleep(for: .milliseconds(100))
         }
