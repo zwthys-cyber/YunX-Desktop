@@ -54,8 +54,11 @@ struct CloudHomeScreen: View {
                                 return
                             }
                             error = nil
-                            let canonical = "https://" + share.provider.webHost + "/s/" + share.shareID + (share.passcode.isEmpty ? "" : "?pwd=" + share.passcode)
-                            library.record(platform: provider.rawValue, text: canonical)
+                            var canonical = URLComponents()
+                            canonical.scheme = "https"; canonical.host = share.provider.webHost
+                            canonical.path = "/s/" + share.shareID
+                            if !share.passcode.isEmpty { canonical.queryItems = [URLQueryItem(name: "pwd", value: share.passcode)] }
+                            if let url = canonical.url { library.record(platform: provider.rawValue, text: url.absoluteString) }
                             route = CloudRoute(provider: provider, account: selected, share: share)
                         } catch { self.error = error.localizedDescription }
                     }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -67,7 +70,7 @@ struct CloudHomeScreen: View {
                 }
                 if let error { Section("提示") { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Text("当前接入夸克和 UC 的目录与单文件免转存取链。文件夹批量下载、转存管理及其他平台仍在移植。")
+                    Text("当前接入夸克和 UC 的目录与单文件免转存取链。支持当前文件夹递归批量下载（最多 500 文件/100 目录）；转存管理及其他平台仍在移植。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
@@ -131,6 +134,36 @@ final class CloudBrowserModel: ObservableObject {
         catch { failure = error.localizedDescription }
     }
 
+    func downloadCurrentFolder() async {
+        guard !busy, let folder = folders.last else { return }
+        busy = true; failure = nil; message = "正在枚举文件夹…"
+        defer { busy = false }
+        var added = 0
+        var failed = 0
+        do {
+            let batch = try await CloudFolderCollector().collect(rootID: folder.id) { parent, page in
+                try await self.client.list(share: self.share, parentID: parent, page: page)
+            }
+            for item in batch {
+                try Task.checkCancellation()
+                do {
+                    let result = try await client.download(file: item.file, share: share)
+                    try Task.checkCancellation()
+                    // Keep the download store's flat layout while retaining the folder names in the filename.
+                    let name = (item.relativeFolders + [result.filename]).joined(separator: "_")
+                    if downloads.add(result.url, filename: name, headers: result.headers, expectedSize: result.size) {
+                        added += 1
+                    } else { failed += 1 }
+                } catch is CancellationError { throw CancellationError() }
+                catch { failed += 1 }
+                message = "已加入 \(added) 个，失败 \(failed) 个（共 \(batch.count) 个）"
+            }
+            message = batch.isEmpty ? "文件夹没有可下载的文件。" : "批量处理结束：已加入 \(added) 个，失败 \(failed) 个。"
+        } catch is CancellationError {
+            message = "已取消后续添加；已加入 \(added) 个任务，可在下载页暂停。"
+        } catch { message = nil; failure = error.localizedDescription }
+    }
+
     func download(_ file: CloudFile) async {
         guard !busy else { return }
         busy = true
@@ -153,6 +186,7 @@ struct CloudBrowserScreen: View {
     let route: CloudRoute
     @StateObject private var model: CloudBrowserModel
     @State private var action: Task<Void, Never>?
+    @State private var confirmBatch = false
     @Environment(\.dismiss) private var dismiss
 
     init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore) {
@@ -169,7 +203,11 @@ struct CloudBrowserScreen: View {
                     if model.folders.count > 1 {
                         Button("返回上级") { action = Task { await model.back() } }.disabled(model.busy)
                     }
-                    if model.busy { ProgressView("正在请求平台…") }
+                    Button("下载此目录（含子目录）") { confirmBatch = true }.disabled(model.busy)
+                    if model.busy {
+                        ProgressView("正在请求平台…")
+                        Button("取消后续操作") { action?.cancel() }
+                    }
                     if let failure = model.failure { Text(failure).foregroundStyle(.red) }
                     if let message = model.message { Text(message).foregroundStyle(.green) }
                 }
@@ -211,6 +249,9 @@ struct CloudBrowserScreen: View {
             .task { await model.reload() }
             .refreshable { await model.reload() }
             .onDisappear { action?.cancel() }
+            .confirmationDialog("将递归加入当前目录下的文件，最多 500 个文件、100 个目录。子目录名称合并到文件名，不创建目录树。", isPresented: $confirmBatch, titleVisibility: .visible) {
+                Button("开始批量下载") { action = Task { await model.downloadCurrentFolder() } }
+            }
         }
     }
 }
