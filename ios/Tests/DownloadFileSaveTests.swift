@@ -98,21 +98,24 @@ final class DownloadFileSaveTests: XCTestCase {
 
     @MainActor
     func testStoreResumesRetainedSaveAfterRestartWithoutNetworkCredentials() async throws {
-        let (folder, root, cache, id, bytes) = try fixture()
-        defer { try? FileManager.default.removeItem(at: folder) }
-        var item = DownloadItem(id: id, url: URL(string: "https://expired.invalid/file")!, filename: "result.bin", state: .downloading)
-        item.requiresHeaders = true // No Keychain credential is installed: no network may be started.
-        try JSONEncoder().encode([item]).write(to: cache.appendingPathComponent("tasks.json"))
-        let store = DownloadStore(root: root, cache: cache, configuration: .ephemeral)
-        XCTAssertEqual(store.items.first?.state, .paused)
-        XCTAssertEqual(store.items.first?.pendingSave, true)
-        store.start(id)
-        let deadline = Date().addingTimeInterval(10)
-        while store.items.first?.state != .completed, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
-        XCTAssertEqual(store.items.first?.state, .completed)
-        XCTAssertNil(store.items.first?.pendingSave)
-        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("result.bin")), bytes)
-        XCTAssertFalse(DownloadFileSave.pending(cache: cache, id: id))
-        try await store.quiesceForStorage()
+        for alreadyPublished in [false, true] {
+            let (folder, root, cache, id, bytes) = try fixture()
+            defer { try? FileManager.default.removeItem(at: folder) }
+            if alreadyPublished { _ = try DownloadFileSave.finish(cache: cache, id: id, root: root) }
+            var item = DownloadItem(id: id, url: URL(string: "https://expired.invalid/file")!, filename: "result.bin", state: .downloading)
+            item.requiresHeaders = true // No Keychain credential is installed: no network may be started.
+            try JSONEncoder().encode([item]).write(to: cache.appendingPathComponent("tasks.json"))
+            let store = DownloadStore(root: root, cache: cache, configuration: .ephemeral)
+            XCTAssertEqual(store.items.first?.state, .paused)
+            XCTAssertEqual(store.items.first?.pendingSave, true)
+            store.start(id)
+            let deadline = Date().addingTimeInterval(10)
+            while store.items.first?.state != .completed, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+            XCTAssertEqual(store.items.first?.state, .completed)
+            XCTAssertNil(store.items.first?.pendingSave)
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("result.bin")), bytes)
+            XCTAssertFalse(DownloadFileSave.pending(cache: cache, id: id))
+            try await store.quiesceForStorage()
+        }
     }
 }
