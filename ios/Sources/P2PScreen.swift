@@ -153,7 +153,7 @@ struct P2PScreen: View {
                         } catch { store.message = error.localizedDescription }
                     }
                 }.disabled(savingRate || store.busy)
-                Text("多个原生文件和连接共享此速率，可短时突发至多 64 KiB。普通下载页的系统会话、HLS 和 P2P 不在此限速范围内；修改对运行中的原生 HTTP 文件读取生效。")
+                Text("多个原生文件和连接共享此速率，短时可能突发，底层连接缓冲可能预读。普通下载页的系统会话、HLS 和 P2P 不在此限速范围内；修改对运行中的原生 HTTP 文件读取生效。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("引擎设置") {
