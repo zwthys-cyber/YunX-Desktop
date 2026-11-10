@@ -20,7 +20,8 @@ permissions:
 
 concurrency:
   group: ios-ipa-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve the current run's tests and IPA; the latest push waits its turn.
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -116,7 +117,7 @@ jobs:
 
       - name: Show generated native networking bridge declarations
         shell: bash
-        run: find ios/Frameworks/Yunxengine.xcframework -name '*.h' -exec grep -nE 'ProxyResolver|resolve:|SetProxyResolver|SetNativeHTTPBandwidthLimit|HeaderResolver|headers:' {} +
+        run: find ios/Frameworks/Yunxengine.xcframework -name '*.h' -exec grep -nE 'ProxyResolver|resolve:|SetProxyResolver|SetNativeHTTPBandwidthLimit|SetNativeHTTPTransport|HeaderResolver|headers:' {} +
 
       - name: Install JDK for desktop backup interoperability fixtures
         uses: actions/setup-java@v4
