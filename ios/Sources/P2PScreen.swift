@@ -111,6 +111,8 @@ struct P2PScreen: View {
     @State private var filename = ""
     @State private var checksum = ""
     @State private var confirmConnections = false
+    @State private var httpRate = "0"
+    @State private var savingRate = false
     @AppStorage("engineHTTPConnections") private var httpConnections = 4
     @State private var importing = false
     @State private var deleting: EngineTask?
@@ -136,6 +138,22 @@ struct P2PScreen: View {
                 Button("加入下载") { Task { await store.add(input, trackers: trackers) } }.disabled(store.busy || input.isEmpty)
                 Button("导入 .torrent 种子") { importing = true }.disabled(store.busy)
                 Text("内置原生 Gopeed 引擎，当前按前台任务运行。进入后台可能被系统暂停；不保证后台常驻。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("原生 HTTP 文件限速") {
+                TextField("KiB/s，0 表示不限", text: $httpRate).keyboardType(.numberPad)
+                Button("保存原生 HTTP 限速") {
+                    savingRate = true
+                    Task { @MainActor in
+                        defer { savingRate = false }
+                        do {
+                            guard let value = Int(httpRate.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw CloudError.message("请输入整数 KiB/s。") }
+                            try await NativeEngine.shared.setHTTPBandwidthLimit(kibPerSecond: value)
+                            store.message = value == 0 ? "原生 HTTP 文件下载不限速。" : "原生 HTTP 文件合计限速 \(value) KiB/s。"
+                        } catch { store.message = error.localizedDescription }
+                    }
+                }.disabled(savingRate || store.busy)
+                Text("多个原生文件和连接共享此速率，可短时突发至多 64 KiB。普通下载页的系统会话、HLS 和 P2P 不在此限速范围内；修改对运行中的原生 HTTP 文件读取生效。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("引擎设置") {
@@ -182,6 +200,7 @@ struct P2PScreen: View {
                 Text("固定上游版本及对应源码随 GitHub 构建产物保存。")
             }
         }.navigationTitle("原生引擎任务")
+            .onAppear { httpRate = String(UserDefaults.standard.integer(forKey: "engineHTTPRateKiB")) }
             .task {
                 while !Task.isCancelled {
                     await store.refresh()

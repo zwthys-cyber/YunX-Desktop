@@ -48,6 +48,7 @@ actor NativeEngine {
     func ensureStarted() async throws {
         if let startup { return try await startup.value }
         guard !DownloadStorage.isMigrating else { throw DownloadStorageError.busy }
+        try Self.applyHTTPBandwidthLimit(UserDefaults.standard.integer(forKey: "engineHTTPRateKiB"))
         _ = try NetworkProxy.current()
         let resolver = IOSProxyResolver()
         proxyResolver = resolver
@@ -82,6 +83,17 @@ actor NativeEngine {
     private static func bindProxy(_ resolver: IOSProxyResolver) throws {
         var error: NSError?
         guard YunxengineSetProxyResolver(resolver, &error) else { throw CloudError.message("原生引擎代理配置失败，请重启应用后重试。") }
+    }
+    private static func applyHTTPBandwidthLimit(_ kibPerSecond: Int) throws {
+        guard (0...1_048_576).contains(kibPerSecond) else { throw CloudError.message("原生 HTTP 限速需为 0–1048576 KiB/s，0 表示不限。") }
+        var error: NSError?
+        guard YunxengineSetNativeHTTPBandwidthLimit(Int64(kibPerSecond) * 1024, &error) else {
+            throw CloudError.message("原生 HTTP 限速设置失败。")
+        }
+    }
+    func setHTTPBandwidthLimit(kibPerSecond: Int) throws {
+        try Self.applyHTTPBandwidthLimit(kibPerSecond)
+        UserDefaults.standard.set(kibPerSecond, forKey: "engineHTTPRateKiB")
     }
     func refreshNetworkProxy(profile: NetworkProxyProfile? = nil, startIfNeeded: Bool = false) async throws {
         guard startup != nil || startIfNeeded else { return }
