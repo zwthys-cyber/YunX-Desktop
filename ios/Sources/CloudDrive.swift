@@ -57,8 +57,16 @@ struct CloudShare: Equatable {
     static func parse(_ text: String, override: String = "") throws -> CloudShare {
         let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let range = NSRange(text.startIndex..., in: text)
-        for match in detector.matches(in: text, range: range) {
-            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+        // NSDataDetector may stop before a hash-router fragment. Preserve complete
+        // literal URLs first, then retain detector normalization as a fallback.
+        let literal = try NSRegularExpression(pattern: #"https?://[^\s<>"']+"#, options: [.caseInsensitive])
+        let rawURLs = literal.matches(in: text, range: range).compactMap { match -> URL? in
+            guard let range = Range(match.range, in: text) else { return nil }
+            return URL(string: String(text[range]).trimmingCharacters(in: CharacterSet(charactersIn: "，。；、！？）》」』】")))
+        }
+        let detectedURLs = detector.matches(in: text, range: range).compactMap(\.url)
+        for url in rawURLs + detectedURLs {
+            guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                   url.user == nil, url.password == nil,
                   let provider = CloudProvider.allCases.first(where: { $0.acceptsShareHost(url.host?.lowercased() ?? "") }) else { continue }
             if provider == .pan115 {
