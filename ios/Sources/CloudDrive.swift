@@ -5,10 +5,21 @@ import Foundation
 enum CloudProvider: String, CaseIterable, Identifiable {
     case quark = "夸克"
     case uc = "UC"
+    case pan123 = "123"
     var id: String { rawValue }
-    var apiHost: String { self == .quark ? "drive-pc.quark.cn" : "pc-api.uc.cn" }
-    var webHost: String { self == .quark ? "pan.quark.cn" : "drive.uc.cn" }
-    var cookieDomain: String { self == .quark ? "quark.cn" : "uc.cn" }
+    var apiHost: String {
+        switch self { case .quark: return "drive-pc.quark.cn"; case .uc: return "pc-api.uc.cn"; case .pan123: return "yun.123pan.cn" }
+    }
+    var webHost: String {
+        switch self { case .quark: return "pan.quark.cn"; case .uc: return "drive.uc.cn"; case .pan123: return "www.123pan.com" }
+    }
+    var cookieDomain: String {
+        switch self { case .quark: return "quark.cn"; case .uc: return "uc.cn"; case .pan123: return "123pan.cn" }
+    }
+    func acceptsShareHost(_ host: String) -> Bool {
+        if self == .pan123 { return ["www.123pan.com", "123pan.com", "www.123865.com", "123865.com", "www.123684.com", "123684.com", "www.123912.com", "123912.com", "www.123pan.cn", "yun.123pan.cn"].contains(host) }
+        return host == webHost
+    }
     var origin: String { "https://" + webHost }
     var loginURL: URL { URL(string: origin + "/")! }
     var userAgent: String {
@@ -33,10 +44,10 @@ struct CloudShare: Equatable {
         let range = NSRange(text.startIndex..., in: text)
         for match in detector.matches(in: text, range: range) {
             guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-                  let provider = CloudProvider.allCases.first(where: { $0.webHost == url.host?.lowercased() }) else { continue }
+                  let provider = CloudProvider.allCases.first(where: { $0.acceptsShareHost(url.host?.lowercased() ?? "") }) else { continue }
             let parts = url.path.split(separator: "/")
             guard parts.count >= 2, parts[0] == "s",
-                  parts[1].range(of: "^[A-Za-z0-9]+$", options: .regularExpression) != nil else { continue }
+                  parts[1].range(of: provider == .pan123 ? "^[A-Za-z0-9_-]+$" : "^[A-Za-z0-9]+$", options: .regularExpression) != nil else { continue }
             let queryCode = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name.lowercased() == "pwd" })?.value
             let pattern = #"(?:提取码|访问码|密码)\s*[：:]?\s*([A-Za-z0-9]{4,8})"#
@@ -47,7 +58,7 @@ struct CloudShare: Equatable {
             return CloudShare(provider: provider, shareID: String(parts[1]),
                               passcode: manual.isEmpty ? (queryCode ?? textCode ?? "") : manual)
         }
-        throw CloudError.message("目前支持夸克和 UC 分享链接，请粘贴完整的 https://…/s/… 链接。")
+        throw CloudError.message("目前支持夸克、UC 和 123 分享链接，请粘贴完整的 https://…/s/… 链接。")
     }
 }
 
@@ -89,6 +100,7 @@ final class CloudClient {
     let provider: CloudProvider
     private(set) var cookie: String
     private var guestCookie = ""
+    private var pan123: Pan123Client?
     private let session: URLSession
     private let cookieChanged: ((String) -> Void)?
     private var tokens: [CloudShareKey: String] = [:]
@@ -108,11 +120,13 @@ final class CloudClient {
             config.timeoutIntervalForRequest = 30
             self.session = URLSession(configuration: config, delegate: CloudRedirectPolicy(), delegateQueue: nil)
         }
+        if provider == .pan123 { pan123 = Pan123Client(token: cookie, session: self.session) }
     }
 
     deinit { session.invalidateAndCancel() }
 
     func validateAccount() async throws -> String {
+        if let pan123 { return try await pan123.validate() }
         guard !cookie.isEmpty else { throw CloudError.message("请先登录或输入 Cookie。") }
         var request = URLRequest(url: URL(string: provider.origin + "/account/info")!)
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -144,6 +158,7 @@ final class CloudClient {
     }
 
     func list(share: CloudShare?, parentID: String = "0", page: Int = 1) async throws -> [CloudFile] {
+        if let pan123 { return try await pan123.list(share: share, parent: parentID, page: page) }
         guard page >= 1 else { throw CloudError.message("分页参数无效。") }
         var query = ["pdir_fid": parentID, "_page": String(page), "_size": "50",
                      "_fetch_total": "1", "_sort": "file_type:asc,file_name:asc"]
@@ -185,6 +200,7 @@ final class CloudClient {
     }
 
     func download(file: CloudFile, share: CloudShare?) async throws -> CloudDownload {
+        if let pan123 { return try await pan123.download(file: file, share: share) }
         guard !file.isDirectory else { throw CloudError.message("请进入文件夹后选择文件下载。") }
         var body: [String: Any] = ["fids": [file.id]]
         var query: [String: String] = [:]

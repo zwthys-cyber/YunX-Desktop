@@ -57,7 +57,7 @@ struct MediaScreen: View {
                     Picker("平台", selection: $provider) {
                         ForEach(MediaProvider.allCases) { Text($0.rawValue).tag($0) }
                     }.disabled(model.busy)
-                        .onChange(of: provider) { _, _ in accountID = nil; model.clear(); loadedCookie = "" }
+                        .onChange(of: provider) { _, _ in accountID = accounts.first(where: { $0.isPrimary == true })?.id; model.clear(); loadedCookie = "" }
                     Picker("账号", selection: $accountID) {
                         Text("游客").tag(Optional<UUID>.none)
                         ForEach(accounts) { Text($0.remark.isEmpty ? "已保存账号" : $0.remark).tag(Optional($0.id)) }
@@ -128,6 +128,7 @@ struct MediaScreen: View {
                 }
             }
             .navigationTitle("视频与图集")
+            .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
             .sheet(item: $preview) { MediaPreviewScreen(asset: $0.asset) }
             .confirmationDialog("将这些文件加入前台下载任务？", isPresented: $confirmAll, titleVisibility: .visible) {
                 Button("加入全部下载") {
@@ -192,7 +193,7 @@ struct MediaPreviewScreen: View {
                         if let failure = movie.failure { Text(failure).foregroundStyle(.red).padding() }
                     }.onAppear { movie.start(asset) }.onDisappear { movie.stop() }
                 } else { MediaImagePreview(asset: asset) }
-            }.navigationTitle(asset.label).navigationBarTitleDisplayMode(.inline)
+            }.onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }.navigationTitle(asset.label).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
         }
     }

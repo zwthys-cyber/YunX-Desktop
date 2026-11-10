@@ -29,7 +29,7 @@ struct CloudHomeScreen: View {
                 Section("平台与账号") {
                     Picker("平台", selection: $provider) {
                         ForEach(CloudProvider.allCases) { Text($0.rawValue).tag($0) }
-                    }.onChange(of: provider) { _, _ in accountID = nil }
+                    }.onChange(of: provider) { _, _ in accountID = accounts.first(where: { $0.isPrimary == true })?.id }
                     Picker("账号", selection: $accountID) {
                         Text("游客").tag(Optional<UUID>.none)
                         ForEach(accounts) { account in
@@ -37,7 +37,7 @@ struct CloudHomeScreen: View {
                                 .tag(Optional(account.id))
                         }
                     }
-                    Text("可到「账号」网页登录或添加 Cookie；游客受平台文件大小和风控限制。")
+                    Text("可到「我的 → 账号管理」登录或添加凭证；123 使用 JWT，游客仅浏览分享，取链需要登录。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("解析分享") {
@@ -70,10 +70,11 @@ struct CloudHomeScreen: View {
                 }
                 if let error { Section("提示") { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Text("当前接入夸克和 UC 的目录与单文件免转存取链。支持当前文件夹递归批量下载（最多 500 文件/100 目录）；转存管理及其他平台仍在移植。")
+                    Text("当前接入夸克、UC 和 123 的目录与单文件取链。支持当前文件夹递归批量下载（最多 500 文件/100 目录）；转存管理及其他平台仍在移植。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
+                .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
                 .sheet(item: $route) { item in
                     CloudBrowserScreen(route: item, vault: vault, downloads: downloads)
                 }

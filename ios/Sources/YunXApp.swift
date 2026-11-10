@@ -124,6 +124,8 @@ struct AccountScreen: View {
     @State private var secret = ""
     @State private var loginProvider: CloudProvider?
     @State private var mediaLoginProvider: MediaProvider?
+    @State private var pan123Login = false
+    @State private var editingCredential: SavedCredential?
     @State private var verifyingID: UUID?
     @State private var verification: String?
     private let platforms = [
@@ -134,8 +136,9 @@ struct AccountScreen: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("网页登录") {
-                    ForEach(CloudProvider.allCases) { provider in
+                Section("登录") {
+                    Button("123 账号密码登录") { pan123Login = true }
+                    ForEach(CloudProvider.allCases.filter { $0 != .pan123 }) { provider in
                         Button("登录" + provider.rawValue) { loginProvider = provider }
                     }
                     ForEach(MediaProvider.allCases) { provider in
@@ -176,6 +179,7 @@ struct AccountScreen: View {
                                     .disabled(verifyingID != nil).buttonStyle(.bordered)
                             }
                             Menu {
+                                Button("编辑备注") { editingCredential = account }
                                 Button("设为主账号") { vault.setPrimary(account.id) }
                                 Button("删除", role: .destructive) { vault.delete(account.id) }
                             } label: { Image(systemName: "ellipsis.circle") }
@@ -183,6 +187,8 @@ struct AccountScreen: View {
                     }
                 }
             }.navigationTitle("账号")
+                .sheet(item: $editingCredential) { CredentialEditScreen(account: $0, vault: vault) }
+                .sheet(isPresented: $pan123Login) { Pan123LoginScreen(vault: vault) }
                 .sheet(item: $loginProvider) { provider in
                     CloudWebLogin(provider: provider, vault: vault)
                 }
@@ -233,17 +239,19 @@ struct PortStatusScreen: View {
                     Label("暂停、断点数据保存、重试", systemImage: "pause.circle")
                     Label("任务记录与文件导出", systemImage: "square.and.arrow.up")
                     Label("Keychain 多账号凭证存储", systemImage: "key")
-                    Label("GitHub 文件目录、README 文本与 Releases", systemImage: "shippingbox")
+                    Label("GitHub 目录、README、Releases 与账号浏览", systemImage: "shippingbox")
+                    Label("123 登录、游标目录与签名取链", systemImage: "externaldrive")
+                    Label("口令加密认证备份与恢复预览", systemImage: "lock.shield")
                 }
                 Section("尚未移植") {
                     ForEach([
                         "其他网盘适配与转存管理",
                         "其余视频平台、B 站 DASH 合轨及 Pixiv 动图",
-                        "GitHub 完整 Markdown 渲染、镜像和测速",
+                        "GitHub 子路径链接、镜像和测速",
                         "多线程分片、校验、限速与多源下载",
                         "HLS、DASH 合轨与 Live Photo",
                         "BT、磁力、ed2k 与 Gopeed 引擎",
-                        "其他平台网页登录、备份与诊断",
+                        "其他平台登录/令牌适配与运行诊断",
                         "分享扩展、浏览器集成与后台下载"
                     ], id: \.self) { Text($0) }
                 }

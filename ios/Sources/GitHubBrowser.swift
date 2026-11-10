@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import SwiftUI
 import Foundation
+import WebKit
 
 struct GitHubRepository: Equatable {
     let owner: String
@@ -118,6 +119,25 @@ final class GitHubClient {
               let text = String(data: data, encoding: .utf8) else { throw CloudError.message("README 不是可显示的 UTF-8 文本。") }
         return text
     }
+    func readmeHTML(_ repo: GitHubRepository) async throws -> String {
+        var parts = URLComponents()
+        parts.scheme = "https"; parts.host = "api.github.com"; parts.path = repo.apiPath + "/readme"
+        guard let url = parts.url else { throw CloudError.message("README 地址无效。") }
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github.html+json", forHTTPHeaderField: "Accept")
+        request.setValue("YunX-iOS", forHTTPHeaderField: "User-Agent")
+        if !token.isEmpty { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw CloudError.message("README 无法加载，请检查访问权限或切换原始文本。") }
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < 2 * 1024 * 1024 else { throw CloudError.message("README 超过 2MB 显示上限。") }
+            data.append(byte)
+        }
+        guard let text = String(data: data, encoding: .utf8) else { throw CloudError.message("README 文本编码不受支持。") }
+        return text
+    }
     func releases(_ repo: GitHubRepository, page: Int) async throws -> [GitHubRelease] {
         try await get(repo.apiPath + "/releases", query: [URLQueryItem(name: "per_page", value: "20"), URLQueryItem(name: "page", value: String(page))])
     }
@@ -167,6 +187,7 @@ struct GitHubScreen: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("GitHub")
+                .onAppear { if accountID == nil { accountID = vault.accounts.first(where: { $0.platform == "GitHub" && $0.isPrimary == true })?.id } }
                 .navigationDestination(isPresented: Binding(get: { repo != nil }, set: { if !$0 { repo = nil } })) {
                     if let repo {
                         GitHubRepositoryScreen(repo: repo, client: GitHubClient(token: vault.accounts.first { $0.id == accountID && $0.platform == "GitHub" }?.secret ?? ""), downloads: downloads)
@@ -228,18 +249,65 @@ struct GitHubReadmeScreen: View {
     @State private var text = ""
     @State private var message: String?
     @State private var loading = true
+    @State private var formatted = true
     var body: some View {
-        ScrollView {
+        VStack {
+            Toggle("排版显示", isOn: $formatted).padding(.horizontal)
             if loading { ProgressView() }
-            if let message { Text(message) }
-            Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding()
-        }.navigationTitle("README（文本）").task {
+            if let message { Text(message).foregroundStyle(.secondary).padding() }
+            if formatted {
+                GitHubMarkdownView(html: text, baseURL: URL(string: "https://github.com/" + repo.owner + "/" + repo.name + "/")!)
+            } else {
+                ScrollView { Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding() }
+            }
+        }.navigationTitle("README").task(id: formatted) {
+            loading = true; message = nil; text = ""
             defer { loading = false }
-            do { text = try await client.readme(repo) }
-            catch { if !Task.isCancelled { message = error.localizedDescription } }
+            do {
+                if formatted { text = try await client.readmeHTML(repo) }
+                else { text = try await client.readme(repo) }
+            }
+            catch { if !Task.isCancelled { message = "README 加载失败，请检查网络、访问权限或切换显示模式。" } }
         }
     }
 }
+
+struct GitHubMarkdownView: UIViewRepresentable {
+    let html: String
+    let baseURL: URL
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.navigationDelegate = context.coordinator
+        return view
+    }
+    func updateUIView(_ view: WKWebView, context: Context) {
+        guard context.coordinator.loaded != html else { return }
+        context.coordinator.loaded = html
+        let document = """
+        <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+        <style>:root{color-scheme:light dark}body{font:16px -apple-system;line-height:1.6;padding:12px;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{overflow:auto;padding:12px;background:rgba(128,128,128,.12)}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;display:block;overflow:auto}td,th{border:1px solid #888;padding:6px}blockquote{border-left:3px solid #888;margin-left:0;padding-left:12px}a{color:#4285f4}</style></head><body>\(html)</body></html>
+        """
+        view.loadHTMLString(document, baseURL: baseURL)
+    }
+    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) { view.stopLoading(); view.navigationDelegate = nil }
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var loaded: String?
+        func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            if action.navigationType == .linkActivated {
+                if let url = action.request.url, url.scheme?.lowercased() == "https", url.user == nil, url.password == nil {
+                    UIApplication.shared.open(url)
+                }
+                decisionHandler(.cancel)
+            } else { decisionHandler(.allow) }
+        }
+    }
+}
+
 struct GitHubReleasesScreen: View {
     let repo: GitHubRepository
     let client: GitHubClient

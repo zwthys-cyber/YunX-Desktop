@@ -80,3 +80,47 @@ final class GitHubTests: XCTestCase {
         }
     }
 }
+
+final class GitHubHTMLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (Int, Data))?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else { throw CloudError.message("No live network in tests") }
+            let (status, data) = try handler(request)
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/html"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
+    }
+    override func stopLoading() { }
+}
+
+extension GitHubTests {
+    func testReadmeHTMLUsesGitHubRenderingAndRejectsErrorBodies() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [GitHubHTMLProtocol.self]
+        let html = "<table><tr><td>测试</td></tr></table><details><summary>更多</summary>内容</details>"
+        GitHubHTMLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "api.github.com")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/vnd.github.html+json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+            return (200, Data(html.utf8))
+        }
+        defer { GitHubHTMLProtocol.handler = nil }
+        let client = GitHubClient(token: "test-token", session: URLSession(configuration: config))
+        let repo = GitHubRepository(owner: "owner", name: "repo")
+        let actual = try await client.readmeHTML(repo)
+        XCTAssertEqual(actual, html)
+        GitHubHTMLProtocol.handler = { _ in (403, Data("test-token private-server-text".utf8)) }
+        do {
+            _ = try await client.readmeHTML(repo)
+            XCTFail("Expected rejection")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.contains("test-token"))
+            XCTAssertFalse(error.localizedDescription.contains("private-server-text"))
+        }
+    }
+}
