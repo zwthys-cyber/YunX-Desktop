@@ -99,6 +99,12 @@ final class P2PStore: ObservableObject {
 
 struct P2PScreen: View {
     @StateObject private var store = P2PStore()
+    private var displayedTasks: [EngineTask] {
+        store.tasks.enumerated().sorted {
+            if ($0.element.status == "error") != ($1.element.status == "error") { return $0.element.status == "error" }
+            return $0.offset < $1.offset
+        }.map(\.element)
+    }
     @State private var input = ""
     init(initialInput: String = "") { _input = State(initialValue: initialInput) }
     @State private var https = ""
@@ -149,7 +155,7 @@ struct P2PScreen: View {
             }
             if let message = store.message { Section { Text(message).foregroundStyle(.secondary) } }
             Section("任务") {
-                ForEach(store.tasks) { task in
+                ForEach(displayedTasks) { task in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(task.name).lineLimit(2)
                         Text(task.statusTitle + " · " + task.protocol).font(.caption).foregroundStyle(.secondary)

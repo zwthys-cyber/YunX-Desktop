@@ -252,13 +252,19 @@ final class MediaAssemblyStore: ObservableObject {
 @MainActor
 struct AssemblyQueueScreen: View {
     @ObservedObject var store: MediaAssemblyStore
+    private var displayedJobs: [AssemblyJob] {
+        store.jobs.enumerated().sorted {
+            if ($0.element.state == .failed) != ($1.element.state == .failed) { return $0.element.state == .failed }
+            return $0.offset < $1.offset
+        }.map(\.element)
+    }
     @State private var selected: LocalMovieRoute?
     @State private var selectedLivePhoto: LivePhotoRoute?
     @State private var exporting: ExportFilesRoute?
     var body: some View {
         List {
             if let error = store.storageError { Text(error).foregroundStyle(.red) }
-            ForEach(store.jobs) { job in
+            ForEach(displayedJobs) { job in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(job.filename).lineLimit(2)
                     Text(job.title).font(.caption).foregroundStyle(.secondary)
