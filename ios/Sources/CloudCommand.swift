@@ -9,6 +9,7 @@ final class CloudCommandClient: @unchecked Sendable {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 20
         self.session = NetworkProxy.session(configuration: config, delegate: CloudCommandRedirectPolicy(), delegateQueue: nil)
     }
     deinit { session.invalidateAndCancel() }
@@ -23,6 +24,7 @@ final class CloudCommandClient: @unchecked Sendable {
         return value
     }
     func resolve(_ text: String, passcode: String = "") async throws -> CloudShare {
+        try Task.checkCancellation()
         guard Self.candidate(text) else { throw CloudError.message("请输入不超过 120 字的中文口令。") }
         if let keyword = Self.xunleiKeyword(text) {
             var url = URLComponents(string: "https://api-shoulei-ssl.xunlei.com/xlppc.searcher.api/jump")!
@@ -58,6 +60,7 @@ final class CloudCommandClient: @unchecked Sendable {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw CloudError.message("口令服务暂不可用，请稍后重试。") }
         var data = Data()
         for try await byte in bytes {
+            try Task.checkCancellation()
             guard data.count < 262144 else { throw CloudError.message("口令服务响应过大。") }
             data.append(byte)
         }

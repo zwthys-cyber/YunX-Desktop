@@ -11,6 +11,16 @@ final class HeldDownloadProtocol: URLProtocol {
 
 @MainActor
 final class DownloadPersistenceTests: XCTestCase {
+    func testInvalidInputDoesNotBlockAnOtherwiseWritableStorageMigration() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = DownloadStore(root: folder.appendingPathComponent("Downloads"), cache: folder.appendingPathComponent("Support"), configuration: configuration())
+        XCTAssertFalse(store.add(URL(string: "ftp://example.invalid/file")!))
+        XCTAssertNotNil(store.storageError)
+        try await store.quiesceForStorage()
+        XCTAssertNil(store.storageError)
+        XCTAssertTrue(store.items.isEmpty)
+    }
     private func configuration() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudMockProtocol.self]

@@ -69,8 +69,9 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/Library/Caches/go-build
-          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
+          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-${{ github.run_id }}
           restore-keys: |
+            go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-
             go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-
 
       - name: Restore native iOS engine
@@ -103,13 +104,13 @@ jobs:
           key: yunx-engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
 
       - name: Preserve Go cache before app checks
-        if: steps.engine-build.conclusion == 'success' && steps.go-engine-cache.outputs.cache-hit != 'true'
+        if: always() && (steps.engine-build.outcome == 'success' || steps.engine-build.outcome == 'failure') && steps.go-engine-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
             ~/go/pkg/mod
             ~/Library/Caches/go-build
-          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
+          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-${{ github.run_id }}
 
       - name: Show generated proxy bridge declarations
         shell: bash

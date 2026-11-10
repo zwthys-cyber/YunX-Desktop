@@ -24,6 +24,7 @@ struct CloudHomeScreen: View {
     @State private var resolvingCommand = false
     @State private var pendingCommand = ""
     @State private var pendingPasscode = ""
+    @State private var commandTask: Task<Void, Never>?
 
     private var accounts: [SavedCredential] { vault.accounts.filter { $0.platform == provider.rawValue } }
     private var selected: SavedCredential? { accounts.first { $0.id == accountID } }
@@ -57,7 +58,10 @@ struct CloudHomeScreen: View {
                             pendingCommand = input; pendingPasscode = passcode; confirmingCommand = true
                         } else { error = "未识别到分享链接或中文口令。" }
                     }.disabled(resolvingCommand || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    if resolvingCommand { ProgressView("正在解析口令") }
+                    if resolvingCommand {
+                        ProgressView("正在解析口令")
+                        Button("取消口令解析") { commandTask?.cancel() }
+                    }
                 }
                 Section("个人网盘") {
                     Button("浏览我的文件") {
@@ -71,17 +75,19 @@ struct CloudHomeScreen: View {
                 }
             }.navigationTitle("网盘")
                 .confirmationDialog("将口令发送到解析服务？", isPresented: $confirmingCommand, titleVisibility: .visible) {
-                    Button("发送并解析") { Task { await resolveCommand() } }
+                    Button("发送并解析") { commandTask?.cancel(); commandTask = Task { await resolveCommand() } }
                     Button("取消", role: .cancel) { pendingCommand = ""; pendingPasscode = "" }
                 } message: {
                     Text("先尝试迅雷；无结果时将口令及手填提取码发送至第三方星海服务。仅发送本次文本，不发送网盘账号凭据。服务可能记录文本。")
                 }
                 .onReceive(navigation.$cloudInput.compactMap { $0 }) { value in
+                    commandTask?.cancel()
                     input = value; passcode = ""; error = nil
                     if let share = try? CloudShare.parse(value) { provider = share.provider }
                     navigation.cloudInput = nil
                 }
                 .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
+                .onDisappear { commandTask?.cancel() }
                 .sheet(item: $route) { item in
                     CloudBrowserScreen(route: item, vault: vault, downloads: downloads)
                 }
@@ -90,15 +96,17 @@ struct CloudHomeScreen: View {
     private func resolveCommand() async {
         guard !resolvingCommand else { return }
         let command = pendingCommand, code = pendingPasscode
+        let requestedProvider = provider, requestedAccount = accountID
         pendingCommand = ""; pendingPasscode = ""; resolvingCommand = true
         defer { resolvingCommand = false }
         do {
             let share = try await CloudCommandClient().resolve(command, passcode: code)
             try Task.checkCancellation()
+            guard input == command, passcode == code, provider == requestedProvider, accountID == requestedAccount else { return }
             provider = share.provider
             accountID = vault.accounts.first { $0.platform == share.provider.rawValue && $0.isPrimary == true }?.id
             open(share)
-        } catch { self.error = "口令解析失败。请检查网络、稍后重试或粘贴原始分享链接。" }
+        } catch { if !Task.isCancelled { self.error = "口令解析失败。请检查网络、稍后重试或粘贴原始分享链接。" } }
     }
     private func open(_ share: CloudShare) {
         guard share.provider == provider else { error = "这是\(share.provider.rawValue)链接，请先切换平台再解析。"; return }

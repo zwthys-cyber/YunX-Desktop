@@ -319,7 +319,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             guard Date() < deadline else { throw DownloadStorageError.busy }
             try await Task.sleep(for: .milliseconds(100))
         }
-        guard storageError == nil else { throw DownloadStorageError.unavailable }
+        guard !unreadableIndex, save() else { throw DownloadStorageError.unavailable }
     }
 
     func delete(_ id: UUID) {
