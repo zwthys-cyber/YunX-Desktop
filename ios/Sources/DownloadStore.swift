@@ -31,6 +31,8 @@ struct DownloadItem: Codable, Identifiable {
     var expectedMedia: String?
     var backgroundTransfer: Bool?
     var originFallback: URL?
+    var retryCount: Int?
+    var retryAt: Date?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -58,6 +60,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private var notificationWork: [UUID: Task<Void, Never>] = [:]
     private let manager = FileManager.default
     private var unreadableIndex = false
+    private var retryWake: DispatchWorkItem?
 
     override convenience init() {
         self.init(root: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Downloads", isDirectory: true),
@@ -147,15 +150,23 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         let previous = items[index]
         items[index].state = .waiting
         items[index].error = nil
+        items[index].retryCount = 0; items[index].retryAt = nil
         guard save() else { items[index] = previous; return }
         drainQueue()
     }
 
     private func drainQueue() {
         guard !unreadableIndex, !restoringBackground else { return }
-        for id in items.reversed().filter({ $0.state == .waiting }).map(\.id) {
+        retryWake?.cancel(); retryWake = nil
+        let now = Date()
+        for id in items.reversed().filter({ $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }).map(\.id) {
             guard active.count < max(1, min(6, maximumConcurrent)) else { break }
             launch(id)
+        }
+        if let date = items.filter({ $0.state == .waiting }).compactMap(\.retryAt).filter({ $0 > now }).min() {
+            let work = DispatchWorkItem { [weak self] in self?.drainQueue() }
+            retryWake = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, date.timeIntervalSinceNow), execute: work)
         }
     }
     func refreshForegroundNetworking() {
@@ -178,6 +189,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         for index in items.indices where [.paused, .failed].contains(items[index].state) {
             items[index].state = .waiting
             items[index].error = nil
+            items[index].retryCount = 0; items[index].retryAt = nil
         }
         guard save() else { items = previous; return }
         drainQueue()
@@ -214,6 +226,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         active[id] = task
         latestTaskIdentity[id] = ObjectIdentifier(task)
         items[index].state = .downloading
+        items[index].retryAt = nil
         items[index].backgroundTransfer = usesBackground
         items[index].error = nil
         guard save() else {
@@ -351,6 +364,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
               (200..<300).contains(response.statusCode) else {
             if queueOriginFallback(index) { return }
             let status = (downloadTask.response as? HTTPURLResponse)?.statusCode
+            if queueRetry(index, status: status, retryAfter: (downloadTask.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")) { return }
             Task { await Diagnostics.shared.record(.downloadFailed, code: status) }
             items[index].state = .failed
             items[index].error = "服务器未返回成功的 HTTP 状态"
@@ -401,12 +415,24 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     @discardableResult
+    private func queueRetry(_ index: Int, status: Int? = nil, error: NSError? = nil, retryAfter: String? = nil) -> Bool {
+        let count = items[index].retryCount ?? 0
+        guard let delay = DownloadRetry.delay(attempt: count, status: status, error: error, retryAfter: retryAfter) else { return false }
+        let previous = items[index]
+        items[index].retryCount = count + 1; items[index].retryAt = Date().addingTimeInterval(delay)
+        items[index].state = .waiting; items[index].error = "临时网络故障，将自动重试（\(count + 1)/3）。"
+        guard save() else { items[index] = previous; return false }
+        return true
+    }
+
+    @discardableResult
     private func queueOriginFallback(_ index: Int) -> Bool {
         guard let origin = items[index].originFallback, items[index].requiresHeaders != true,
               GitHubMirrorPolicy.publicOrigin(origin) else { return false }
         let previous = items[index]
         items[index].url = origin; items[index].originFallback = nil
         items[index].received = 0; items[index].expected = 0; items[index].state = .waiting
+        items[index].retryCount = 0; items[index].retryAt = nil
         items[index].error = nil
         // A mirror resume archive can contain its request URL and incompatible bytes.
         try? manager.removeItem(at: resumeURL(previous.id))
@@ -456,6 +482,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             let code = error.code
             Task { await Diagnostics.shared.record(.downloadFailed, code: code) }
             writeResume(error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, id: id)
+            if error.userInfo[NSURLSessionDownloadTaskResumeData] == nil { try? manager.removeItem(at: resumeURL(id)) }
+            if queueRetry(index, error: error) { return }
             items[index].state = .failed
             // 不展示 NSError 描述，避免把带有凭证的完整请求 URL 显示或记录。
             items[index].error = "网络错误（\(error.domain)，\(error.code)），可重试"

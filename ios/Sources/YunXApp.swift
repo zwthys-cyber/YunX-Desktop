@@ -193,7 +193,7 @@ struct AccountScreen: View {
                         vault.add(platform: platform, remark: remark, secret: secret)
                         if vault.message == nil { secret = ""; remark = "" }
                     }.disabled(secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Text("夸克、UC、123、光鸭、蓝奏优享、迅雷和媒体平台已接入解析；GitHub Token 用于仓库 API。百度、139、115 和蓝奏云暂时仅存储。迅雷凭据还需要对应设备标识，请使用官网登录或完整备份。")
+                    Text("十种网盘和媒体平台已接入账号验证与解析；GitHub Token 用于官方 API。迅雷需要对应设备标识，139 需要官网 authorization；请使用官网登录或完整备份。平台权限、会员和安全验证仍由平台决定。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let message = vault.message {

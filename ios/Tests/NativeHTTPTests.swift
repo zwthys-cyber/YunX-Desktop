@@ -10,11 +10,13 @@ final class NativeHTTPFixture {
     private let observer: (@Sendable (String) -> Void)?
     private let lock = NSLock()
     private var stopped = false
+    private var failuresRemaining: Int
     private var starts: [Int] = []
     private var clients = Set<Int32>()
     private let port: UInt16
-    init(data: Data, observer: (@Sendable (String) -> Void)? = nil) throws {
+    init(data: Data, failures: Int = 0, observer: (@Sendable (String) -> Void)? = nil) throws {
         self.data = data
+        self.failuresRemaining = failures
         self.observer = observer
         let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard socket >= 0 else { throw CloudError.message("Fixture socket failed") }
@@ -67,6 +69,14 @@ final class NativeHTTPFixture {
         }
         let text = String(decoding: input, as: UTF8.self)
         observer?(text)
+        lock.lock()
+        let fail = failuresRemaining > 0
+        if fail { failuresRemaining -= 1 }
+        lock.unlock()
+        if fail {
+            _ = write(Data("HTTP/1.1 503 Unavailable\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8), socket: socket)
+            return
+        }
         var start = 0
         var end = data.count - 1
         var partial = false
