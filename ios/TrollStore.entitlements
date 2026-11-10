@@ -8,5 +8,7 @@
     <array>
         <string>YUNXLOCAL.io.github.zwthys.yunx</string>
     </array>
+    <key>com.apple.security.application-groups</key>
+    <array><string>group.io.github.zwthys.yunx</string></array>
 </dict>
 </plist>

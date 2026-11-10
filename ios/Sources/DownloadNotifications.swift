@@ -7,6 +7,11 @@ import UIKit
 final class AppNavigation: ObservableObject {
     static let shared = AppNavigation()
     @Published var selectedTab = 0
+    @Published var cloudInput: String?
+    @Published var mediaInput: String?
+    @Published var githubInput: String?
+    @Published var githubOwner: String?
+    @Published var downloadInput: String?
 }
 
 actor DownloadNotifications {

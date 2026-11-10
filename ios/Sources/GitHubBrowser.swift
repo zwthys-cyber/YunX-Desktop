@@ -225,6 +225,7 @@ final class GitHubClient {
     }
 }
 struct GitHubScreen: View {
+    @ObservedObject private var navigation = AppNavigation.shared
     @EnvironmentObject var library: LinkLibrary
     @ObservedObject var vault: CredentialVault
     @ObservedObject var downloads: DownloadStore
@@ -278,6 +279,8 @@ struct GitHubScreen: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("GitHub")
+                .onReceive(navigation.$githubInput.compactMap { $0 }) { value in input = value; message = nil; navigation.githubInput = nil }
+                .onReceive(navigation.$githubOwner.compactMap { $0 }) { value in owner = value; organization = false; message = nil; navigation.githubOwner = nil }
                 .onAppear { if accountID == nil { accountID = vault.accounts.first(where: { $0.platform == "GitHub" && $0.isPrimary == true })?.id } }
                 .onDisappear { action?.cancel() }
                 .navigationDestination(isPresented: Binding(get: { repo != nil }, set: { if !$0 { repo = nil } })) {

@@ -10,6 +10,8 @@ struct YunXApp: App {
     @StateObject private var library = LinkLibrary()
     @StateObject private var assemblies = MediaAssemblyStore()
     @StateObject private var navigation = AppNavigation.shared
+    @StateObject private var inbox = ShareInboxModel()
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearance = "system"
     @AppStorage("accentRGB") private var accent = ThemeColor.initial
 
@@ -26,6 +28,7 @@ struct YunXApp: App {
                     List {
                         NavigationLink("P2P 下载引擎") { P2PScreen() }
                         NavigationLink("网页资源浏览器") { ResourceBrowserScreen(downloads: downloads) }
+                        NavigationLink("分享收件箱（\(inbox.pending.count)）") { ShareInboxScreen(model: inbox) }
                         NavigationLink("账号管理") { AccountScreen(vault: vault) }
                         NavigationLink("认证备份") { AccountBackupScreen(vault: vault) }
                         NavigationLink("设置与收藏") { SettingsScreen(downloads: downloads) }
@@ -37,7 +40,8 @@ struct YunXApp: App {
             }
             .environmentObject(library)
             .environmentObject(assemblies)
-            .task { await Diagnostics.shared.record(.appOpened) }
+            .task { await Diagnostics.shared.record(.appOpened); inbox.refresh() }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { inbox.refresh() } }
             .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
             .tint(ThemeColor.color(accent))
         }
@@ -46,6 +50,7 @@ struct YunXApp: App {
 
 @MainActor
 struct DownloadScreen: View {
+    @ObservedObject private var navigation = AppNavigation.shared
     @EnvironmentObject var assemblies: MediaAssemblyStore
     @ObservedObject var store: DownloadStore
     @State private var input = ""
@@ -133,6 +138,7 @@ struct DownloadScreen: View {
                 }
             }.navigationTitle("云析")
         }
+        .onReceive(navigation.$downloadInput.compactMap { $0 }) { value in input = value; inputError = nil; navigation.downloadInput = nil }
     }
 }
 

@@ -10,6 +10,7 @@ struct CloudRoute: Identifiable {
 
 @MainActor
 struct CloudHomeScreen: View {
+    @ObservedObject private var navigation = AppNavigation.shared
     @EnvironmentObject var library: LinkLibrary
     @ObservedObject var vault: CredentialVault
     @ObservedObject var downloads: DownloadStore
@@ -75,6 +76,11 @@ struct CloudHomeScreen: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
+                .onReceive(navigation.$cloudInput.compactMap { $0 }) { value in
+                    input = value; passcode = ""; error = nil
+                    if let share = try? CloudShare.parse(value) { provider = share.provider }
+                    navigation.cloudInput = nil
+                }
                 .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
                 .sheet(item: $route) { item in
                     CloudBrowserScreen(route: item, vault: vault, downloads: downloads)

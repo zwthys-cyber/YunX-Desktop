@@ -22,6 +22,12 @@ xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Release \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 app="$build_dir/DerivedData/Build/Products/Release-iphoneos/YunX.app"
 test -d "$app" || { echo "找不到设备版 YunX.app" >&2; exit 1; }
+share_extension="$app/PlugIns/YunXShare.appex"
+test -d "$share_extension" || { echo "找不到分享扩展，拒绝打包不完整的应用。" >&2; exit 1; }
+/usr/bin/codesign --force --sign - --timestamp=none \
+  --entitlements ShareExtension/TrollStore.entitlements --generate-entitlement-der "$share_extension"
+/usr/bin/codesign --verify --strict "$share_extension"
+xcrun lipo "$share_extension/YunXShare" -verify_arch arm64
 /usr/bin/codesign --force --sign - --timestamp=none \
   --entitlements TrollStore.entitlements --generate-entitlement-der "$app"
 /usr/bin/codesign --verify --strict "$app"

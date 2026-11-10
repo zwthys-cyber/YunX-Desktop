@@ -15,7 +15,10 @@ targets:
     sources:
       - path: Sources
       - path: Resources
+      - path: Shared
     dependencies:
+      - target: YunXShare
+        embed: true
       - framework: Frameworks/Yunxengine.xcframework
         embed: false
       - sdk: libc++.tbd
@@ -26,6 +29,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.zwthys.yunx
         INFOPLIST_FILE: Info.plist
         PRODUCT_NAME: YunX
+        CODE_SIGN_ENTITLEMENTS: SharedGroup.entitlements
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: 云析
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
@@ -33,6 +37,26 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        MARKETING_VERSION: "0.3.0"
+        CURRENT_PROJECT_VERSION: "3"
+  YunXShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+        includes:
+          - "**/*.swift"
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.zwthys.yunx.share
+        PRODUCT_NAME: YunXShare
+        INFOPLIST_FILE: ShareExtension/Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: 保存到云析
+        CODE_SIGN_ENTITLEMENTS: SharedGroup.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
         MARKETING_VERSION: "0.3.0"
         CURRENT_PROJECT_VERSION: "3"
   YunXTests:

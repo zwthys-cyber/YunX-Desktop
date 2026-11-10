@@ -100,6 +100,7 @@ final class P2PStore: ObservableObject {
 struct P2PScreen: View {
     @StateObject private var store = P2PStore()
     @State private var input = ""
+    init(initialInput: String = "") { _input = State(initialValue: initialInput) }
     @State private var https = ""
     @State private var filename = ""
     @State private var checksum = ""

@@ -52,6 +52,7 @@ final class MediaScreenModel: ObservableObject {
 
 @MainActor
 struct MediaScreen: View {
+    @ObservedObject private var navigation = AppNavigation.shared
     @EnvironmentObject var library: LinkLibrary
     @EnvironmentObject var assemblies: MediaAssemblyStore
     @ObservedObject var vault: CredentialVault
@@ -157,6 +158,11 @@ struct MediaScreen: View {
                 }
             }
             .navigationTitle("视频与图集")
+            .onReceive(navigation.$mediaInput.compactMap { $0 }) { value in
+                input = value; model.clear(); loadedLink = nil; loadedCookie = ""
+                if let link = try? MediaLink.parse(value) { provider = link.provider }
+                navigation.mediaInput = nil
+            }
             .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
             .sheet(item: $browserRoute) { route in
                 BrowserMediaResolver(route: route) { result in
