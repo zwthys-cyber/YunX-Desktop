@@ -12,6 +12,7 @@ java Fixtures/BackupFixture.java > Tests/backup-vectors.json
 java Fixtures/ILanzouFixture.java > Tests/ilanzou-vectors.json
 java Fixtures/C139Fixture.java > Tests/c139-vectors.json
 java Fixtures/Pan115Fixture.java > Tests/pan115-vectors.json
+java Fixtures/LanzouFixture.java > Tests/lanzou-vectors.json
 xcodegen generate
 mkdir -p build
 simulator_id="$(xcrun simctl list devices available --json | python3 -c '

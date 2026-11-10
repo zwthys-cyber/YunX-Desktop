@@ -55,8 +55,8 @@ struct CloudHomeScreen: View {
                             }
                             error = nil
                             var canonical = URLComponents()
-                            canonical.scheme = "https"; canonical.host = share.provider.webHost
-                            canonical.path = share.provider == .c139 ? "/shareweb/" : "/s/" + share.shareID
+                            canonical.scheme = "https"; canonical.host = share.sourceURL?.host ?? share.provider.webHost
+                            canonical.path = share.provider == .c139 ? "/shareweb/" : (share.provider == .lanzou ? "/" + share.shareID : "/s/" + share.shareID)
                             if share.provider == .c139 { canonical.fragment = "/w/i/" + share.shareID }
                             if !share.passcode.isEmpty { canonical.queryItems = [URLQueryItem(name: "pwd", value: share.passcode)] }
                             if let url = canonical.url { library.record(platform: provider.rawValue, text: url.absoluteString) }
@@ -208,6 +208,7 @@ struct CloudBrowserScreen: View {
     let route: CloudRoute
     @StateObject private var model: CloudBrowserModel
     @State private var action: Task<Void, Never>?
+    @State private var shareDownloadFile: CloudFile?
     @State private var confirmBatch = false
     @State private var renameFile: CloudFile?
     @State private var name = ""
@@ -232,7 +233,10 @@ struct CloudBrowserScreen: View {
                     if model.folders.count > 1 {
                         Button("返回上级") { action = Task { await model.back() } }.disabled(model.busy)
                     }
-                    if [CloudProvider.xunlei, .baidu].contains(route.provider), route.share != nil {
+                    if route.provider == .lanzou, route.share == nil {
+                        Text("蓝奏个人文件取链会生成公开分享链接，请逐个确认下载。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else if [CloudProvider.xunlei, .baidu].contains(route.provider), route.share != nil {
                         Text("\(route.provider.rawValue)分享需选择已登录账号转存，再从个人网盘下载。转存前可选择目标目录。")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else { Button("下载此目录（含子目录）") { confirmBatch = true }.disabled(model.busy) }
@@ -268,6 +272,8 @@ struct CloudBrowserScreen: View {
                             } else {
                                 if [CloudProvider.xunlei, .baidu].contains(route.provider), route.share != nil {
                                     Button("转存") { destinationFile = file }.buttonStyle(.bordered).disabled(model.busy || route.account == nil)
+                                } else if route.provider == .lanzou, route.share == nil {
+                                    Button("生成分享并下载") { shareDownloadFile = file }.buttonStyle(.bordered).disabled(model.busy)
                                 } else {
                                     Button("下载") { action = Task { await model.download(file) } }
                                         .buttonStyle(.bordered).disabled(model.busy)
@@ -278,9 +284,9 @@ struct CloudBrowserScreen: View {
                             if route.provider.supportsManagement, route.account != nil {
                                 if route.share == nil {
                                     Button("重命名") { renameFile = file; name = file.name; showName = true }
-                                    Button("移动到…") { destinationFile = file }
+                                    if route.provider != .lanzou || !file.isDirectory { Button("移动到…") { destinationFile = file } }
                                     Button("从网盘删除", role: .destructive) { deleteFile = file }
-                                } else { Button("转存到个人网盘…") { destinationFile = file } }
+                                } else if route.provider.supportsTransfer { Button("转存到个人网盘…") { destinationFile = file } }
                             }
                         }.disabled(model.busy)
                     }
@@ -292,6 +298,10 @@ struct CloudBrowserScreen: View {
                     }
                 }
             }
+            .confirmationDialog("生成公开分享链接？", isPresented: Binding(get: { shareDownloadFile != nil }, set: { if !$0 { shareDownloadFile = nil } }), titleVisibility: .visible, presenting: shareDownloadFile) { file in
+                Button("生成分享并下载") { action = Task { await model.download(file) }; shareDownloadFile = nil }
+                Button("取消", role: .cancel) { shareDownloadFile = nil }
+            } message: { _ in Text("此操作将通过蓝奏官网为该文件生成公开分享链接，随后下载；链接可在官网管理或撤销。") }
             .navigationTitle(route.share == nil ? "\(route.provider.rawValue)网盘" : "\(route.provider.rawValue)分享")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .task { await model.reload() }

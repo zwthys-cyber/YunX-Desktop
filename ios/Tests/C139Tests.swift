@@ -38,6 +38,7 @@ final class C139Tests: XCTestCase {
     }
     func testFragmentLinkAndIdentityRejectMismatchedCredentials() throws {
         let share = try CloudShare.parse("https://yun.139.com/shareweb/#/w/i/abc-_DEF 提取码：1234")
+        XCTAssertEqual(try CloudShare.parse("https://yun.139.com/shareweb#/w/i/abc").shareID, "abc")
         XCTAssertEqual(share.provider, .c139); XCTAssertEqual(share.shareID, "abc-_DEF"); XCTAssertEqual(share.passcode, "1234")
         XCTAssertEqual(try CloudShare.parse("https://yun.139.com/shareweb/?pwd=1234#/w/i/abc").passcode, "1234")
         XCTAssertThrowsError(try CloudShare.parse("https://yun.139.com.evil.test/shareweb/#/w/i/abc"))
