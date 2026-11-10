@@ -17,6 +17,8 @@ struct YunXApp: App {
                     .tabItem { Label("下载", systemImage: "arrow.down.circle") }
                 AccountScreen(vault: vault)
                     .tabItem { Label("账号", systemImage: "person.crop.circle") }
+                GitHubScreen(vault: vault, downloads: downloads)
+                    .tabItem { Label("GitHub", systemImage: "shippingbox") }
                 PortStatusScreen()
                     .tabItem { Label("移植进度", systemImage: "list.clipboard") }
             }
@@ -135,7 +137,7 @@ struct AccountScreen: View {
                         vault.add(platform: platform, remark: remark, secret: secret)
                         if vault.message == nil { secret = ""; remark = "" }
                     }.disabled(secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Text("夸克、UC、哔哩哔哩和 Pixiv 已接入解析；其他平台暂时仅存储。")
+                    Text("夸克、UC、哔哩哔哩和 Pixiv 已接入解析；GitHub Token 已用于仓库 API；其他平台暂时仅存储。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let message = vault.message {
@@ -207,12 +209,13 @@ struct PortStatusScreen: View {
                     Label("暂停、断点数据保存、重试", systemImage: "pause.circle")
                     Label("任务记录与文件导出", systemImage: "square.and.arrow.up")
                     Label("Keychain 多账号凭证存储", systemImage: "key")
+                    Label("GitHub 文件目录、README 文本与 Releases", systemImage: "shippingbox")
                 }
                 Section("尚未移植") {
                     ForEach([
                         "其他网盘适配、文件夹批量与转存管理",
                         "其余视频平台、B 站 DASH 合轨及 Pixiv 动图",
-                        "GitHub 仓库浏览、镜像和测速",
+                        "GitHub 用户仓库列表、Markdown 渲染、镜像和测速",
                         "多线程分片、校验、限速与多源下载",
                         "HLS、DASH 合轨与 Live Photo",
                         "BT、磁力、ed2k 与 Gopeed 引擎",

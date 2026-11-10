@@ -8,6 +8,10 @@
 
 按仓库使用者最新授权，仅通过 GitHub 接口读取及修改源码，允许 GitHub Actions 编译。不在当前代理服务器下载、处理、验证或编译源码。iOS 构建使用 GitHub 托管 macOS runner，不创建会触发上游 Windows 构建的 PR。也保留用户自行在本地 Mac 构建的方式。
 
+## GitHub 浏览模块（本轮新增）
+
+支持输入 `owner/repo` 或 GitHub HTTPS 仓库首页，递归浏览默认分支目录、查看 README 原始文本、分页浏览 Releases 并下载公开文件和发布附件。可选择钥匙串内 GitHub Token，仅发送给 `api.github.com`；API 禁止自动跳转，文件下载不携带 Token。私有文件下载、用户/组织仓库列表、完整 Markdown 渲染和镜像测速尚未实现。单个目录受 GitHub Contents API 的 1000 项限制。新增离线测试由 GitHub Actions 执行，本机不编译或验证。
+
 ## 当前编写内容（等待真机验证）
 
 - SwiftUI 原生页面，最低系统 iOS 17.0，iPhone / iPad。
@@ -76,7 +80,7 @@ bash build-local.sh
 | --- | --- |
 | 网盘 | 已编写夸克 / UC 目录与单文件免转存取链；尚缺文件夹批量、转存管理、刷新失效直链，以及迅雷、百度、139、123、115、光鸭、蓝奏云、蓝奏优享等适配 |
 | 视频 | 已编写 B 站单文件流、分 P 与清晰度及 Pixiv 多页原图；抖音、快手、微博、小红书、AcFun、DASH 和动图等仍待移植 |
-| GitHub | 用户/组织仓库、文件树、Releases、README、Token、镜像测速和回退 |
+| GitHub | 已编写默认分支文件树、README 文本、Releases 分页及公开附件下载、Token API；用户/组织列表、完整 Markdown、私有下载、镜像测速和回退待做 |
 | 下载核心 | Range 分片、并发/限速、断点校验、SHA-256、重试、慢连接抢占、多源多账号、缓存维护 |
 | 媒体 | 已编写 MP4 原生在线预览与图片预览；HLS、DASH 合轨、字幕/音轨策略、片段拼接和 Live Photo 导出待做 |
 | P2P | 可嵌入的 iOS Gopeed/BT/ed2k 引擎、Tracker、DHT、peer 信息；不得拿 Windows EXE 充当 iOS 引擎 |
