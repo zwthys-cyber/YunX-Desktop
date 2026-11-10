@@ -10,6 +10,7 @@ struct YunXApp: App {
     @StateObject private var library = LinkLibrary()
     @StateObject private var assemblies = MediaAssemblyStore()
     @AppStorage("appearance") private var appearance = "system"
+    @AppStorage("accentRGB") private var accent = ThemeColor.initial
 
     var body: some Scene {
         WindowGroup {
@@ -36,6 +37,7 @@ struct YunXApp: App {
             .environmentObject(assemblies)
             .task { await Diagnostics.shared.record(.appOpened) }
             .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
+            .tint(ThemeColor.color(accent))
         }
     }
 }

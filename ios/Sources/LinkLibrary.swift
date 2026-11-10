@@ -57,6 +57,7 @@ struct LibraryPicker: View {
     @EnvironmentObject var library: LinkLibrary
     let platform: String
     let select: (String) -> Void
+    @State private var showAll = false
     var body: some View {
         Menu("历史与收藏", systemImage: "clock.arrow.circlepath") {
             let links = library.links.filter { $0.platform == platform }
@@ -64,6 +65,36 @@ struct LibraryPicker: View {
             ForEach(links.prefix(30)) { link in
                 Button((link.favorite ? "★ " : "") + link.text) { select(link.text) }
             }
+            if !links.isEmpty { Button("搜索全部历史与收藏…") { showAll = true } }
+        }.sheet(isPresented: $showAll) {
+            LibrarySelectionScreen(platform: platform) { value in select(value); showAll = false }
+        }
+    }
+}
+
+private struct LibrarySelectionScreen: View {
+    @EnvironmentObject var library: LinkLibrary
+    let platform: String
+    let selected: (String) -> Void
+    @State private var query = ""
+    @State private var favoritesOnly = false
+    @Environment(\.dismiss) private var dismiss
+    private var matching: [LibraryLink] {
+        library.links.filter { $0.platform == platform && (!favoritesOnly || $0.favorite) && (query.isEmpty || $0.text.localizedCaseInsensitiveContains(query)) }
+    }
+    var body: some View {
+        NavigationStack {
+            List {
+                Toggle("只看收藏", isOn: $favoritesOnly)
+                ForEach(matching) { link in
+                    Button { selected(link.text) } label: {
+                        Label(link.text, systemImage: link.favorite ? "star.fill" : "clock").lineLimit(4)
+                    }
+                }
+                if matching.isEmpty { Text("没有匹配的记录。") }
+            }.navigationTitle(platform + "记录")
+                .searchable(text: $query, prompt: "搜索链接或提取码")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
     }
 }
@@ -72,8 +103,14 @@ struct SettingsScreen: View {
     @ObservedObject var downloads: DownloadStore
     @EnvironmentObject var library: LinkLibrary
     @AppStorage("appearance") private var appearance = "system"
+    @AppStorage("accentRGB") private var accent = ThemeColor.initial
     @State private var favoritesOnly = false
     @State private var confirmClear = false
+    @State private var search = ""
+    private var matching: [LibraryLink] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return library.links.filter { (!favoritesOnly || $0.favorite) && (query.isEmpty || $0.platform.localizedCaseInsensitiveContains(query) || $0.text.localizedCaseInsensitiveContains(query)) }
+    }
     var body: some View {
         Form {
             Section("外观") {
@@ -82,6 +119,8 @@ struct SettingsScreen: View {
                     Text("浅色").tag("light")
                     Text("深色").tag("dark")
                 }
+                ColorPicker("强调色", selection: Binding(get: { ThemeColor.color(accent) }, set: { if let value = ThemeColor.value($0) { accent = value } }), supportsOpacity: false)
+                Button("恢复默认强调色") { accent = ThemeColor.initial }
             }
             Section("下载") {
                 Stepper("同时下载：\(downloads.maximumConcurrent)", value: $downloads.maximumConcurrent, in: 1...6)
@@ -91,7 +130,8 @@ struct SettingsScreen: View {
             Section("链接记录") {
                 Toggle("只看收藏", isOn: $favoritesOnly)
                 if let error = library.error { Text(error).foregroundStyle(.red) }
-                ForEach(library.links.filter { !favoritesOnly || $0.favorite }) { link in
+                if !search.isEmpty { Text("匹配 \(matching.count) 条记录").font(.caption).foregroundStyle(.secondary) }
+                ForEach(matching) { link in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(link.platform).font(.caption).foregroundStyle(.secondary)
                         Text(link.text).textSelection(.enabled)
@@ -110,6 +150,7 @@ struct SettingsScreen: View {
             }
             Section { NavigationLink("移植进度与开源许可") { PortStatusScreen() } }
         }.navigationTitle("设置与收藏")
+            .searchable(text: $search, prompt: "搜索平台、链接或提取码")
             .confirmationDialog("清空未收藏的历史记录？", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("清空历史", role: .destructive) { library.clearHistory() }
             }
