@@ -25,7 +25,7 @@ test -d "$app" || { echo "找不到设备版 YunX.app" >&2; exit 1; }
 /usr/bin/codesign --force --sign - --timestamp=none \
   --entitlements TrollStore.entitlements --generate-entitlement-der "$app"
 /usr/bin/codesign --verify --strict "$app"
-xcrun lipo -verify_arch arm64 "$app/YunX"
+xcrun lipo "$app/YunX" -verify_arch arm64
 /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$app/Info.plist"
 mkdir -p "$build_dir/package/Payload"
 ditto "$app" "$build_dir/package/Payload/YunX.app"
