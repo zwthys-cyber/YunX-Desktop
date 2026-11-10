@@ -47,8 +47,10 @@ import sys
 import xml.etree.ElementTree as ET
 path = "YunX.xcodeproj/xcshareddata/xcschemes/YunX.xcscheme"
 tree = ET.parse(path)
-for name in ("RunAction", "TestAction"):
+for name in ("LaunchAction", "TestAction"):
     action = tree.getroot().find(name)
+    if action is None:
+        raise SystemExit("Generated Xcode scheme is missing " + name)
     if name == "TestAction":
         action.set("shouldUseLaunchSchemeArgsEnv", "NO")
     variables = action.find("EnvironmentVariables")

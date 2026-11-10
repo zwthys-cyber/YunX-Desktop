@@ -3,6 +3,17 @@ import XCTest
 @testable import YunX
 
 final class DownloadStorageTests: XCTestCase {
+    func testLocalFoldersCannotEscapeThroughTraversalOrSymlinks() throws {
+        let (root, documents) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: documents.appendingPathComponent("Selected"), withIntermediateDirectories: false)
+        XCTAssertEqual(try DownloadStorage.localParent("documents/Selected", documents: documents), documents.appendingPathComponent("Selected").resolvingSymlinksInPath())
+        for path in ["documents/../outside", "documents//child", "/documents/child", "other/child"] {
+            XCTAssertThrowsError(try DownloadStorage.localParent(path, documents: documents))
+        }
+        try FileManager.default.createSymbolicLink(at: documents.appendingPathComponent("outside"), withDestinationURL: root)
+        XCTAssertThrowsError(try DownloadStorage.localParent("documents/outside", documents: documents))
+    }
     private func fixture() throws -> (URL, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let documents = root.appendingPathComponent("Documents")

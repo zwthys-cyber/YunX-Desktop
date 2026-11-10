@@ -37,6 +37,7 @@ actor GitHubMirrorSelector {
         if mode == "auto" { prefix = await fastest() }
         else if mode == "custom" { prefix = UserDefaults.standard.string(forKey: "githubMirrorCustom") }
         else { prefix = GitHubMirrorPolicy.presets.contains(mode) ? mode : nil }
+        guard (UserDefaults.standard.string(forKey: "githubMirrorMode") ?? "direct") == mode else { return try GitHubMirrorPolicy.plan(download, prefix: nil) }
         return try GitHubMirrorPolicy.plan(download, prefix: prefix)
     }
     func fastest(force: Bool = false) async -> String? {
@@ -102,7 +103,7 @@ struct GitHubMirrorScreen: View {
                         do { custom = try GitHubMirrorPolicy.prefix(draft); message = "已保存。" } catch { message = error.localizedDescription }
                     }
                 }
-                Button("测试内置镜像（最多约 320 KB）") {
+                Button("测试内置镜像（5 个 64 KB 样本）") {
                     testing = true
                     Task {
                         let best = await GitHubMirrorSelector.shared.fastest(force: true)

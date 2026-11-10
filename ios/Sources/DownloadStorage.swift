@@ -66,8 +66,8 @@ enum DownloadStorage {
             // Keep permission alive for Go and background URLSession file operations.
             scopes.append(parent)
         } else {
-            guard target.local == "documents" else { throw DownloadStorageError.unavailable }
-            parent = documents
+            guard let local = target.local else { throw DownloadStorageError.unavailable }
+            parent = try localParent(local, documents: documents)
         }
         return parent.appendingPathComponent(target.folder, isDirectory: true)
     }
@@ -88,24 +88,36 @@ enum DownloadStorage {
     }
     static func location() throws -> String {
         lock.lock(); defer { lock.unlock() }
-        return try load().active == nil ? "本机 YunX / 默认目录" : "自选数据目录（任务路径保持不变）"
+        guard let active = try load().active else { return "本机 YunX / 默认目录" }
+        return (active.local != nil ? "本机 YunX / " : "自选目录 / ") + active.folder
+    }
+    static func localParent(_ value: String, documents: URL) throws -> URL {
+        let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.first == "documents", parts.count <= 128,
+              parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }), value.utf8.count <= 4096 else { throw DownloadStorageError.unavailable }
+        let root = documents.resolvingSymlinksInPath().standardizedFileURL
+        let parent = parts.dropFirst().reduce(root) { $0.appendingPathComponent(String($1), isDirectory: true) }.resolvingSymlinksInPath().standardizedFileURL
+        guard parent == root || parent.path.hasPrefix(root.path + "/") else { throw DownloadStorageError.unavailable }
+        return parent
     }
     /// Called only after all transport engines and assembly writers have stopped.
     static func migrate(to parent: URL?) async throws {
         try prepare()
         let accessed = parent?.startAccessingSecurityScopedResource() ?? false
         defer { if accessed { parent?.stopAccessingSecurityScopedResource() } }
-        if parent != nil, !accessed { throw DownloadStorageError.unavailable }
         let parent = parent ?? documents
         let canonical = parent.resolvingSymlinksInPath().standardizedFileURL
+        let canonicalDocuments = documents.resolvingSymlinksInPath().standardizedFileURL
+        let isLocal = canonical == canonicalDocuments || canonical.path.hasPrefix(canonicalDocuments.path + "/")
+        guard isLocal || accessed else { throw DownloadStorageError.unavailable }
         for name in names {
             let source = documents.appendingPathComponent(name).resolvingSymlinksInPath().standardizedFileURL
             guard canonical != source, !canonical.path.hasPrefix(source.path + "/") else { throw DownloadStorageError.occupied }
         }
         let transaction = UUID()
         let folder = "YunX-" + transaction.uuidString
-        let target = Target(bookmark: accessed ? try parent.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) : nil,
-                            local: accessed ? nil : "documents", folder: folder)
+        let local = isLocal ? "documents" + String(canonical.path.dropFirst(canonicalDocuments.path.count)) : nil
+        let target = Target(bookmark: isLocal ? nil : try parent.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil), local: local, folder: folder)
         let destination = parent.appendingPathComponent(folder, isDirectory: true)
         try await Task.detached(priority: .utility) {
             try copyVerified(documents: documents, destination: destination)
@@ -179,6 +191,11 @@ enum DownloadStorage {
     }
     static func installAliases(documents: URL, target: URL, transaction: UUID) throws {
         let manager = FileManager.default
+        let canonicalTarget = target.resolvingSymlinksInPath().standardizedFileURL
+        for name in names {
+            let source = documents.appendingPathComponent(name).resolvingSymlinksInPath().standardizedFileURL
+            guard canonicalTarget != source, !canonicalTarget.path.hasPrefix(source.path + "/") else { throw DownloadStorageError.occupied }
+        }
         let marker = try Data(contentsOf: target.appendingPathComponent(".yunx-verified"))
         guard marker == Data("yunx-download-storage-v1".utf8) else { throw DownloadStorageError.changed }
         for name in names {
