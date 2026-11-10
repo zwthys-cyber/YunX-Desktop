@@ -20,13 +20,7 @@ enum ILanzouProtocol {
         return output.prefix(count).map { String(format: "%02x", $0) }.joined()
     }
     static func encode(_ text: String) -> String {
-        text.utf8.map { byte in
-            switch byte {
-            case 48...57, 65...90, 97...122, 45, 95, 46, 42, 58: return String(UnicodeScalar(byte))
-            case 32: return "+"
-            default: return String(format: "%%%02X", byte)
-            }
-        }.joined()
+        FormEncoding.encode(text, literalColon: true)
     }
     static func rawID(_ id: String) throws -> String {
         let value = id.hasPrefix("d:") || id.hasPrefix("f:") ? String(id.dropFirst(2)) : id

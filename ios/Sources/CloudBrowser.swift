@@ -231,8 +231,8 @@ struct CloudBrowserScreen: View {
                     if model.folders.count > 1 {
                         Button("返回上级") { action = Task { await model.back() } }.disabled(model.busy)
                     }
-                    if route.provider == .xunlei, route.share != nil {
-                        Text("迅雷分享需选择已登录账号转存，再从个人网盘下载。转存前可选择目标目录。")
+                    if [CloudProvider.xunlei, .baidu].contains(route.provider), route.share != nil {
+                        Text("\(route.provider.rawValue)分享需选择已登录账号转存，再从个人网盘下载。转存前可选择目标目录。")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else { Button("下载此目录（含子目录）") { confirmBatch = true }.disabled(model.busy) }
                     if route.provider.supportsManagement, route.share == nil, route.account != nil {
@@ -265,7 +265,7 @@ struct CloudBrowserScreen: View {
                                 Button("进入") { action = Task { await model.open(file) } }
                                     .buttonStyle(.bordered).disabled(model.busy)
                             } else {
-                                if route.provider == .xunlei, route.share != nil {
+                                if [CloudProvider.xunlei, .baidu].contains(route.provider), route.share != nil {
                                     Button("转存") { destinationFile = file }.buttonStyle(.bordered).disabled(model.busy || route.account == nil)
                                 } else {
                                     Button("下载") { action = Task { await model.download(file) } }

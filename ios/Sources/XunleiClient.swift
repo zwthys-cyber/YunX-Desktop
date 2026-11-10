@@ -202,7 +202,7 @@ final class XunleiClient {
         if !web {
             request.setValue(XunleiProtocol.appAgent, forHTTPHeaderField: "User-Agent")
             for key in ["Sec-Ch-Ua", "Sec-Ch-Ua-Mobile", "Sec-Ch-Ua-Platform"] { request.setValue(nil, forHTTPHeaderField: key) }
-            request.httpBody = ["grant_type": "refresh_token", "client_id": XunleiProtocol.appID, "client_secret": XunleiProtocol.appSecret, "refresh_token": refresh].sorted(by: { $0.key < $1.key }).map { ILanzouProtocol.encode($0.key) + "=" + ILanzouProtocol.encode($0.value) }.joined(separator: "&").data(using: .utf8)
+            request.httpBody = FormEncoding.data(["grant_type": "refresh_token", "client_id": XunleiProtocol.appID, "client_secret": XunleiProtocol.appSecret, "refresh_token": refresh])
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         }
         let (status, root) = try await send(request)
