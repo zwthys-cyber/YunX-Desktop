@@ -33,7 +33,7 @@ struct NativeHTTPTransportScreen: View {
                 if let message { Text(message).font(.footnote) }
             }
             Section {
-                Text("只影响原生 HTTP 文件下载，新建或重连的连接生效；已有连接保留原缓冲。单任务连接读缓冲合计上限为 64 MiB，连接数较多时自动缩小每连接缓冲。限速启用时每次读取还受速率预算约束。")
+                Text("只影响原生 HTTP 文件下载。HTTP/2 设置影响之后建立的连接；修改读缓冲后，请暂停并继续已有下载。单任务连接读缓冲合计上限为 64 MiB，连接数较多时自动缩小每连接缓冲。限速启用时每次读取还受速率预算约束。")
                 Text("普通系统下载会话、HLS 和 P2P 使用各自的传输方式，不应用这些设置。")
             }.font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("原生 HTTP 传输")
@@ -49,7 +49,7 @@ struct NativeHTTPTransportScreen: View {
             guard let amount = Int(buffer.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw CloudError.message("请输入整数 KiB。") }
             let value = try NativeHTTPTransportPreference(http2: http2, bufferKiB: amount)
             try await NativeEngine.shared.setHTTPTransport(value)
-            message = "设置已保存，对新建或重连的原生 HTTP 文件连接生效。"
+            message = "设置已保存；已有下载请暂停后继续，以应用新读缓冲。"
         } catch { message = error.localizedDescription }
     }
 }
