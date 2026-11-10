@@ -6,11 +6,12 @@ import Yunxengine
 
 struct DownloadItem: Codable, Identifiable {
     enum State: String, Codable {
-        case waiting, downloading, pausing, paused, completed, failed
+        case waiting, downloading, saving, pausing, paused, completed, failed
         var title: String {
             switch self {
             case .waiting: return "等待中"
             case .downloading: return "下载中"
+            case .saving: return "正在校验保存"
             case .pausing: return "正在暂停"
             case .paused: return "已暂停"
             case .completed: return "已完成"
@@ -34,6 +35,7 @@ struct DownloadItem: Codable, Identifiable {
     var originFallback: URL?
     var retryCount: Int?
     var retryAt: Date?
+    var pendingSave: Bool?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -61,6 +63,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private var restoringBackground = false
     private var restorableBackground = Set<UUID>()
     private var notificationWork: [UUID: Task<Void, Never>] = [:]
+    private var saveWorkers: [UUID: Task<DownloadFileSave.Result, Error>] = [:]
+    private var saveWork: [UUID: Task<Void, Never>] = [:]
     private let manager = FileManager.default
     private var unreadableIndex = false
     private var retryWake: DispatchWorkItem?
@@ -83,8 +87,16 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             if manager.fileExists(atPath: index.path) {
                 items = try JSONDecoder().decode([DownloadItem].self, from: Data(contentsOf: index))
                 restorableBackground = Set(items.filter { [.downloading, .waiting].contains($0.state) && $0.backgroundTransfer == true }.map(\.id))
-                for index in items.indices where [.downloading, .pausing, .waiting].contains(items[index].state) {
+                for index in items.indices where [.downloading, .saving, .pausing, .waiting].contains(items[index].state) {
                     items[index].state = .paused
+                }
+                for index in items.indices {
+                    if items[index].state == .completed { DownloadFileSave.discard(cache: cache, id: items[index].id) }
+                    else if DownloadFileSave.pending(cache: cache, id: items[index].id) {
+                        items[index].pendingSave = true
+                        items[index].state = .paused
+                        restorableBackground.remove(items[index].id)
+                    }
                 }
                 try manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: index.path)
                 for item in items where manager.fileExists(atPath: resumeURL(item.id).path) {
@@ -153,7 +165,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     func start(_ id: UUID) {
         guard !DownloadStorage.isMigrating else { return }
-        guard !unreadableIndex, active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
+        guard !unreadableIndex, active[id] == nil, saveWorkers[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               [.waiting, .paused, .failed].contains(items[index].state) else { return }
         let previous = items[index]
         items[index].state = .waiting
@@ -168,7 +180,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         retryWake?.cancel(); retryWake = nil
         let now = Date()
         for id in items.reversed().filter({ $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }).map(\.id) {
-            guard active.count < max(1, min(6, maximumConcurrent)), YunxengineAvailableDownloadSlots() > 0 else { break }
+            guard Set(active.keys).union(saveWorkers.keys).count < max(1, min(6, maximumConcurrent)), YunxengineAvailableDownloadSlots() > 0 else { break }
             launch(id)
         }
         if let date = items.filter({ $0.state == .waiting }).compactMap(\.retryAt).filter({ $0 > now }).min() {
@@ -176,7 +188,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             retryWake = work
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, date.timeIntervalSinceNow), execute: work)
         }
-        if active.count < max(1, min(6, maximumConcurrent)), items.contains(where: { $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }) {
+        if Set(active.keys).union(saveWorkers.keys).count < max(1, min(6, maximumConcurrent)), items.contains(where: { $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }) {
             retryWake?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.drainQueue() }
             retryWake = work
@@ -192,7 +204,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func pauseAll() {
-        for id in items.filter({ [.waiting, .downloading].contains($0.state) }).map(\.id) {
+        for id in items.filter({ [.waiting, .downloading, .saving].contains($0.state) }).map(\.id) {
             pause(id)
         }
     }
@@ -212,8 +224,15 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     private func launch(_ id: UUID) {
         guard !DownloadStorage.isMigrating else { return }
-        guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
+        guard active[id] == nil, saveWorkers[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               items[index].state != .completed, items[index].state != .pausing else { return }
+        if items[index].pendingSave == true {
+            let slot = id.uuidString + ".save." + UUID().uuidString
+            guard YunxengineAcquireHTTPTask(slot, false) else { return }
+            transferSlots[id] = slot
+            beginSave(id)
+            return
+        }
         guard NetworkProxy.ready else { items[index].state = .failed; items[index].error = "代理设置不可用，请到设置中修复后重试。"; save(); return }
         var request = URLRequest(url: items[index].url)
         var headers: [String: String] = [:]
@@ -274,7 +293,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         for candidate in tasks {
             guard let task = candidate as? URLSessionDownloadTask, let raw = task.taskDescription, let id = UUID(uuidString: raw),
                   let index = items.firstIndex(where: { $0.id == id }), items[index].backgroundTransfer == true,
-                  items[index].state != .completed, !removed.contains(id) else { candidate.cancel(); continue }
+                  items[index].state != .completed, items[index].pendingSave != true, !removed.contains(id) else { candidate.cancel(); continue }
             guard task.state == .running || task.state == .suspended else { continue }
             if let current = active[id], current !== task { task.cancel(); continue }
             active[id] = task
@@ -295,6 +314,12 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func pause(_ id: UUID) {
+        if let worker = saveWorkers[id], let index = items.firstIndex(where: { $0.id == id }) {
+            items[index].state = .pausing
+            save()
+            worker.cancel()
+            return
+        }
         if let index = items.firstIndex(where: { $0.id == id }), items[index].state == .waiting {
             items[index].state = .paused
             save()
@@ -308,6 +333,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 guard let self, !self.removed.contains(id), self.latestTaskIdentity[id] == ObjectIdentifier(task),
                       let index = self.items.firstIndex(where: { $0.id == id }) else { return }
                 guard self.items[index].state != .completed else { return }
+                guard self.items[index].pendingSave != true else { return }
                 self.writeResume(data, id: id)
                 self.active.removeValue(forKey: id)
                 self.releaseSlot(id)
@@ -327,7 +353,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         pauseAll()
         // Deleting a record removes it from active immediately, but its physical
         // transfer still owns a slot until the completion callback closes it.
-        while !active.isEmpty || !transferSlots.isEmpty {
+        while !active.isEmpty || !transferSlots.isEmpty || !saveWork.isEmpty {
             guard Date() < deadline else { throw DownloadStorageError.busy }
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -340,6 +366,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         items.removeAll { $0.id == id }
         guard save() else { items = previous; return }
         removed.insert(id)
+        if let worker = saveWorkers[id] { worker.cancel() }
+        else { DownloadFileSave.discard(cache: cache, id: id) }
         if let task = active.removeValue(forKey: id) { task.cancel() }
         else { latestTaskIdentity.removeValue(forKey: id) }
         try? manager.removeItem(at: resumeURL(id))
@@ -379,7 +407,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         // A completed background event can arrive before or after getAllTasks.
         // Only this store's real background session can adopt an unknown task.
         guard session === backgroundSession, session.configuration.identifier == BackgroundDownloadPolicy.identifier,
-              !removed.contains(id), let item = items.first(where: { $0.id == id }), item.backgroundTransfer == true, item.state != .completed,
+              !removed.contains(id), let item = items.first(where: { $0.id == id }), item.backgroundTransfer == true, item.state != .completed, item.pendingSave != true,
               let downloadTask = task as? URLSessionDownloadTask else { return false }
         latestTaskIdentity[id] = ObjectIdentifier(task)
         active[id] = downloadTask
@@ -424,7 +452,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard let value = downloadTask.taskDescription, let id = UUID(uuidString: value),
               let index = items.firstIndex(where: { $0.id == id }) else { return }
         guard matchesTask(session, task: downloadTask, id: id) else { return }
-        guard items[index].state != .completed else { return }
+        guard items[index].state != .completed, items[index].pendingSave != true else { return }
         items[index].received = totalBytesWritten
         items[index].expected = totalBytesExpectedToWrite
     }
@@ -432,7 +460,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
         guard let value = downloadTask.taskDescription, let id = UUID(uuidString: value),
-              !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }), items[index].state != .completed else { return }
+              !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }), items[index].state != .completed, items[index].pendingSave != true else { return }
         guard matchesTask(session, task: downloadTask, id: id) else { return }
         guard let response = downloadTask.response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
@@ -455,36 +483,77 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             }
             let initialName = items[index].preserveFilename == true ? items[index].filename :
                 safeName(response.suggestedFilename ?? items[index].filename)
-            let proposed = try MediaFileValidation.filename(initialName, file: location, kind: items[index].expectedMedia, mime: response.mimeType)
-            let original = URL(fileURLWithPath: proposed)
-            let ext = original.pathExtension
-            let stem = original.deletingPathExtension().lastPathComponent
-            var destination = root.appendingPathComponent(proposed)
-            if manager.fileExists(atPath: destination.path) {
-                let suffix = id.uuidString
-                destination = root.appendingPathComponent(
-                    ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
-                )
+            try DownloadFileSave.retain(location, cache: cache, id: id, proposed: initialName,
+                kind: items[index].expectedMedia, mime: response.mimeType, requiredSize: items[index].requiredSize)
+            items[index].pendingSave = true
+            items[index].state = .saving
+            guard save() else {
+                items[index].state = .paused
+                items[index].error = "完整下载已保留；下载记录恢复可写后可继续保存。"
+                return
             }
-            try manager.moveItem(at: location, to: destination)
-            items[index].filename = destination.lastPathComponent
-            items[index].state = .completed
-            items[index].received = (try destination.resourceValues(forKeys: [.fileSizeKey])).fileSize.map(Int64.init) ?? items[index].received
-            try? manager.removeItem(at: resumeURL(id))
-            DownloadHeaders.delete(id)
+            beginSave(id)
+            return
         } catch {
             items[index].state = .failed
             items[index].error = "无法保存文件：\(error.localizedDescription)"
             Task { await Diagnostics.shared.record(.downloadFailed) }
         }
-        if save(), items[index].state == .completed {
-            let size = items[index].received
-            let notificationID = UUID()
-            notificationWork[notificationID] = Task { @MainActor [weak self] in
-                await Diagnostics.shared.record(.downloadCompleted, bytes: size)
-                await DownloadNotifications.shared.completed()
-                self?.notificationWork.removeValue(forKey: notificationID)
+        save()
+    }
+
+    private func beginSave(_ id: UUID) {
+        guard saveWorkers[id] == nil, let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].state = .saving
+        items[index].error = nil
+        guard save() else { items[index].state = .paused; if active[id] == nil { releaseSlot(id) }; return }
+        let cache = self.cache, root = self.root
+        let worker = Task.detached(priority: .utility) { try DownloadFileSave.finish(cache: cache, id: id, root: root) }
+        saveWorkers[id] = worker
+        saveWork[id] = Task { @MainActor [self] in
+            let result = await worker.result
+            defer {
+                saveWorkers.removeValue(forKey: id)
+                saveWork.removeValue(forKey: id)
+                if active[id] == nil { releaseSlot(id) }
+                drainQueue()
             }
+            guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else {
+                DownloadFileSave.discard(cache: cache, id: id)
+                return
+            }
+            switch result {
+            case .success(let output):
+                let previous = items[index]
+                items[index].filename = output.filename
+                items[index].received = output.size
+                items[index].state = .completed
+                items[index].pendingSave = nil
+                items[index].error = nil
+                guard save() else {
+                    items[index] = previous
+                    items[index].state = .paused
+                    items[index].error = "文件已写入目标目录，记录恢复可写后请继续确认保存。"
+                    return
+                }
+                DownloadFileSave.discard(cache: cache, id: id)
+                try? manager.removeItem(at: resumeURL(id))
+                DownloadHeaders.delete(id)
+                notifyCompleted(size: output.size)
+            case .failure(let error):
+                items[index].state = error is CancellationError ? .paused : .failed
+                items[index].error = error is CancellationError ? nil : "保存未完成，完整下载已保留。请检查目录权限和可用空间后继续。"
+                save()
+            }
+        }
+    }
+
+    private func notifyCompleted(size: Int64) {
+        let notificationID = UUID()
+        notificationWork[notificationID] = Task { @MainActor [weak self] in
+            await Diagnostics.shared.record(.downloadCompleted, bytes: size)
+            await DownloadNotifications.shared.completed()
+            self?.notificationWork.removeValue(forKey: notificationID)
         }
     }
 
@@ -541,11 +610,12 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard let value = task.taskDescription, let id = UUID(uuidString: value) else { return }
         guard matchesTask(session, task: task, id: id) else { return }
         active.removeValue(forKey: id)
-        releaseSlot(id)
+        if saveWorkers[id] == nil { releaseSlot(id) }
         if removed.contains(id) { latestTaskIdentity.removeValue(forKey: id) }
         defer { drainQueue() }
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
         if items[index].state == .completed { save(); return }
+        if items[index].pendingSave == true { return }
         if items[index].state == .pausing { return }
         if items[index].state == .waiting { return }
         if items[index].state == .paused, let cancellation = error as NSError?,
@@ -573,8 +643,10 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         guard session.configuration.identifier == BackgroundDownloadPolicy.identifier else { return }
-        let notifications = Array(notificationWork.values)
-        Task { @MainActor in
+        let saves = Array(saveWork.values)
+        Task { @MainActor [self] in
+            for save in saves { await save.value }
+            let notifications = Array(notificationWork.values)
             for notification in notifications { await notification.value }
             BackgroundDownloadEvents.finished()
         }

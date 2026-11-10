@@ -135,7 +135,7 @@ struct DownloadScreen: View {
                             if let error = item.error { Text(error).font(.caption).foregroundStyle(.red) }
                             NavigationLink("任务诊断") { DownloadDiagnosticScreen(store: store, id: item.id) }.font(.caption)
                             HStack {
-                                if item.state == .downloading || item.state == .waiting {
+                                if [.downloading, .saving, .waiting].contains(item.state) {
                                     Button("暂停") { store.pause(item.id) }.buttonStyle(.bordered)
                                 } else if [.paused, .failed, .waiting].contains(item.state) {
                                     Button("继续") { store.start(item.id) }.buttonStyle(.bordered)
