@@ -444,6 +444,7 @@ struct GitHubDirectoryScreen: View {
     @State private var commitDates: [String: Date] = [:]
     @State private var datedCount = 0
     @State private var loadingDates = false
+    @State private var datesTask: Task<Void, Never>?
     var body: some View {
         List {
             if loading { ProgressView() }
@@ -454,7 +455,7 @@ struct GitHubDirectoryScreen: View {
             if entries.count >= 1000 { Text("目录达到 API 1000 项上限，可能未显示全部文件。") }
             if datedCount < entries.count {
                 Button(loadingDates ? "正在读取提交时间…" : "读取下一批提交时间（最多 20 项）") {
-                    Task { await loadDates() }
+                    datesTask = Task { await loadDates() }
                 }.disabled(loadingDates || loading)
                 Text("每项需一次 GitHub API 请求，按需读取以节省账号限额。").font(.caption).foregroundStyle(.secondary)
             }
@@ -470,11 +471,15 @@ struct GitHubDirectoryScreen: View {
             }
         }.navigationTitle(effectivePath.isEmpty ? "文件" : (effectivePath as NSString).lastPathComponent)
             .task(id: effectivePath + "|" + (repo.ref ?? "")) { await load() }.refreshable { await load() }
+            .onDisappear { datesTask?.cancel() }
     }
     @MainActor private func load() async {
-        guard !loading, !loadingDates else { return }
+        guard !loading else { return }
         loading = true; message = nil
         defer { loading = false }
+        datesTask?.cancel()
+        if let datesTask { await datesTask.value }
+        datesTask = nil
         do {
             entries = try await client.contents(repo, path: effectivePath)
             commitDates = [:]; datedCount = 0
@@ -498,7 +503,9 @@ struct GitHubDirectoryScreen: View {
             while datedCount < end {
                 try Task.checkCancellation()
                 let entry = entries[datedCount]
-                commitDates[entry.path] = try await client.latestCommitDate(repo, path: entry.path)
+                let date = try await client.latestCommitDate(repo, path: entry.path)
+                try Task.checkCancellation()
+                commitDates[entry.path] = date
                 datedCount += 1
             }
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
