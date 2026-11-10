@@ -24,6 +24,7 @@ final class WeiboTests: XCTestCase {
         let result = try await client().resolve(link, cookie: "test-cookie")
         XCTAssertEqual(result.author, "测试作者")
         XCTAssertEqual(result.assets.count, 2)
+        XCTAssertEqual(result.assets.first?.livePhotoVideoURL?.host, "video.weibo.com")
         XCTAssertTrue(result.assets[0].filename.hasSuffix(".png"))
         XCTAssertEqual(result.assets[1].kind, .video)
         for asset in result.assets {

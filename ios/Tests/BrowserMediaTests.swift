@@ -23,6 +23,7 @@ final class BrowserMediaTests: XCTestCase {
         let result = try BrowserMediaPayload.result(object, expected: link, current: link.url)
         XCTAssertEqual(result.assets.count, 2)
         XCTAssertEqual(result.assets[0].kind, .image)
+        XCTAssertEqual(result.assets[0].livePhotoVideoURL?.path, "/motion.mp4")
         XCTAssertEqual(result.assets[1].kind, .video)
         XCTAssertTrue(result.assets.allSatisfy { $0.headers["Cookie"] == nil })
         let other = try MediaLink.parse("https://www.douyin.com/note/654321")

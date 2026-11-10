@@ -15,11 +15,13 @@ struct AssemblyJob: Codable, Identifiable {
     var total: Int64 = 0
     var error: String?
     var segments: [URL]? = nil
+    var pairedPhoto: Bool? = nil
+    var outputID: UUID? = nil
     var title: String {
         switch state {
         case .preparing: return "正在准备"
-        case .downloading: return segments == nil ? "下载音视频" : "下载视频片段"
-        case .merging: return segments == nil ? "正在合轨" : "正在拼接"
+        case .downloading: return pairedPhoto == true ? "下载动态照片素材" : (segments == nil ? "下载音视频" : "下载视频片段")
+        case .merging: return pairedPhoto == true ? "正在生成动态照片" : (segments == nil ? "正在合轨" : "正在拼接")
         case .pausing: return "正在暂停"
         case .paused: return "已暂停"
         case .completed: return "已完成"
@@ -61,7 +63,7 @@ final class MediaAssemblyStore: ObservableObject {
         return true
     }
     func resume(_ id: UUID) {
-        guard actions[id] == nil, let position = jobs.firstIndex(where: { $0.id == id }), jobs[position].state != .completed else { return }
+        guard actions[id] == nil, let position = jobs.firstIndex(where: { $0.id == id }), jobs[position].state != .completed || output(jobs[position]) == nil else { return }
         jobs[position].state = .preparing; jobs[position].error = nil
         guard save() else { jobs[position].state = .failed; jobs[position].error = storageError; return }
         actions[id] = Task { await process(id); actions.removeValue(forKey: id) }
@@ -83,6 +85,19 @@ final class MediaAssemblyStore: ObservableObject {
         guard let i = jobs.firstIndex(where: { $0.id == id }), jobs[i].state != .completed else { return }
         jobs[i].state = actions[id] == nil ? .paused : .pausing; save()
     }
+    @discardableResult
+    func addLivePhoto(_ asset: MediaAsset) -> Bool {
+        guard !unreadable, asset.kind == .image, let movie = asset.livePhotoVideoURL else { return false }
+        do {
+            _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers)
+            _ = try NativeHTTPSRequest(text: movie.absoluteString, headers: asset.headers)
+        } catch { storageError = "动态照片素材地址或请求头不受支持。"; return false }
+        var job = AssemblyJob(id: UUID(), video: asset.url, audio: movie, headers: asset.headers, filename: FileNamePolicy.name((asset.filename as NSString).deletingPathExtension + ".jpg"))
+        job.pairedPhoto = true
+        jobs.insert(job, at: 0)
+        guard save() else { jobs.removeAll { $0.id == job.id }; return false }
+        resume(job.id); return true
+    }
     func delete(_ id: UUID) {
         let previous = jobs
         let tracks = jobs.first(where: { $0.id == id })?.trackIDs ?? []
@@ -93,20 +108,29 @@ final class MediaAssemblyStore: ObservableObject {
     }
     func output(_ job: AssemblyJob) -> URL? {
         guard job.state == .completed else { return nil }
-        let file = root.appendingPathComponent(job.id.uuidString, isDirectory: true).appendingPathComponent(job.filename)
+        let file = outputFolder(job).appendingPathComponent(job.filename)
+        if job.pairedPhoto == true, let movie = pairedMovie(job), !FileManager.default.fileExists(atPath: movie.path) { return nil }
         return FileManager.default.fileExists(atPath: file.path) ? file : nil
+    }
+    func pairedMovie(_ job: AssemblyJob) -> URL? {
+        guard job.pairedPhoto == true else { return nil }
+        return outputFolder(job).appendingPathComponent((job.filename as NSString).deletingPathExtension + ".mov")
+    }
+    private func outputFolder(_ job: AssemblyJob) -> URL {
+        let folder = root.appendingPathComponent(job.id.uuidString, isDirectory: true)
+        return job.outputID.map { folder.appendingPathComponent($0.uuidString, isDirectory: true) } ?? folder
     }
     private func process(_ id: UUID) async {
         var staging: URL?
         do {
             guard let initial = jobs.first(where: { $0.id == id }) else { return }
             let sources = initial.segments ?? [initial.video, initial.audio]
-            guard (2...200).contains(sources.count) else { throw CloudError.message("媒体任务片段数量无效。") }
+            guard (2...200).contains(sources.count), initial.pairedPhoto != true || initial.segments == nil else { throw CloudError.message("媒体任务片段数量或合成模式无效。") }
             for (position, url) in sources.enumerated() {
                 try Task.checkCancellation()
                 guard let current = jobs.first(where: { $0.id == id }) else { throw CancellationError() }
                 if current.trackIDs.count <= position {
-                    let trackName = initial.segments == nil ? (position == 0 ? "video.mp4" : "audio.m4a") : "segment-\(position).mp4"
+                    let trackName = initial.pairedPhoto == true ? (position == 0 ? "photo.jpg" : "motion.mov") : (initial.segments == nil ? (position == 0 ? "video.mp4" : "audio.m4a") : "segment-\(position).mp4")
                     let request = try NativeHTTPSRequest(text: url.absoluteString, filename: trackName, headers: initial.headers,
                                                         labels: ["yunxAssembly": id.uuidString])
                     let track = try await NativeEngine.shared.createHTTPS(request)
@@ -151,6 +175,22 @@ final class MediaAssemblyStore: ObservableObject {
             guard let i = jobs.firstIndex(where: { $0.id == id }) else { throw CancellationError() }
             jobs[i].state = .merging; save()
             let folder = root.appendingPathComponent(id.uuidString, isDirectory: true)
+            if initial.pairedPhoto == true {
+                let outputID = UUID()
+                let scratch = folder.appendingPathComponent(".livephoto-" + UUID().uuidString, isDirectory: true)
+                staging = scratch
+                let photoName = FileNamePolicy.name((initial.filename as NSString).deletingPathExtension + ".jpg"), movieName = (photoName as NSString).deletingPathExtension + ".mov"
+                try await LivePhotoAssembly.create(image: files[0], video: files[1], photoOutput: scratch.appendingPathComponent(photoName), movieOutput: scratch.appendingPathComponent(movieName), identifier: initial.id.uuidString)
+                try Task.checkCancellation()
+                guard let final = jobs.firstIndex(where: { $0.id == id }) else { throw CancellationError() }
+                try FileManager.default.moveItem(at: scratch, to: folder.appendingPathComponent(outputID.uuidString, isDirectory: true))
+                staging = nil
+                jobs[final].filename = photoName; jobs[final].outputID = outputID; jobs[final].state = .completed; jobs[final].error = nil
+                let persisted = save()
+                await Diagnostics.shared.record(.assemblyCompleted)
+                if persisted { await DownloadNotifications.shared.completed() }
+                return
+            }
             let scratch = folder.appendingPathComponent(".assembly-" + UUID().uuidString + ".mp4")
             staging = scratch
             if initial.segments != nil { try await AVMediaAssembly.concatenate(files, output: scratch) }
@@ -175,7 +215,7 @@ final class MediaAssemblyStore: ObservableObject {
             for track in tracks { _ = try? await NativeEngine.shared.invoke("PUT", path: "/api/v1/tasks/" + track + "/pause") }
             guard let current = jobs.firstIndex(where: { $0.id == id }) else { return }
             jobs[current].state = Task.isCancelled ? .paused : .failed
-            jobs[current].error = Task.isCancelled ? nil : "下载或合轨失败，直链可能已过期，分轨文件保留以便重试。"
+            jobs[current].error = Task.isCancelled ? nil : "下载或媒体合成失败，直链、格式或系统支持可能受限；原素材保留以便重试。"
             save()
             if !Task.isCancelled { await Diagnostics.shared.record(.assemblyFailed) }
         }
@@ -200,6 +240,8 @@ final class MediaAssemblyStore: ObservableObject {
 struct AssemblyQueueScreen: View {
     @ObservedObject var store: MediaAssemblyStore
     @State private var selected: LocalMovieRoute?
+    @State private var selectedLivePhoto: LivePhotoRoute?
+    @State private var exporting: ExportFilesRoute?
     var body: some View {
         List {
             if let error = store.storageError { Text(error).foregroundStyle(.red) }
@@ -211,20 +253,27 @@ struct AssemblyQueueScreen: View {
                     if let error = job.error { Text(error).font(.caption).foregroundStyle(.red) }
                     HStack {
                         if let file = store.output(job) {
-                            Button("播放") { selected = LocalMovieRoute(url: file) }.buttonStyle(.bordered)
-                            ShareLink(item: file) { Text("导出") }.buttonStyle(.bordered)
+                            if job.pairedPhoto == true, let movie = store.pairedMovie(job) {
+                                Button("动态照片") { selectedLivePhoto = LivePhotoRoute(photo: file, movie: movie) }.buttonStyle(.bordered)
+                                Button("导出配对文件") { exporting = ExportFilesRoute(files: [file, movie]) }.buttonStyle(.bordered)
+                            } else {
+                                Button("播放") { selected = LocalMovieRoute(url: file) }.buttonStyle(.bordered)
+                                ShareLink(item: file) { Text("导出") }.buttonStyle(.bordered)
+                            }
                         } else if [.preparing, .downloading, .merging].contains(job.state) {
                             Button("暂停") { store.pause(job.id) }.buttonStyle(.bordered)
                         } else if job.state == .pausing { ProgressView() }
-                        else { Button("继续") { store.resume(job.id) }.buttonStyle(.bordered) }
+                        else { Button(job.state == .completed ? "重新生成" : "继续") { store.resume(job.id) }.buttonStyle(.bordered) }
                         Spacer()
                         Button("删除记录", role: .destructive) { store.delete(job.id) }.buttonStyle(.bordered)
                     }
                 }
             }
-            Text("合轨/片段拼接使用 iOS 原生无损导出；编码、尺寸或方向不兼容会保留原文件并提示失败。应用重启后手动继续；删除记录保留已下载和已合并文件。")
+            Text("合轨/片段拼接使用 iOS 原生无损导出；编码、尺寸或方向不兼容会保留原文件并提示失败。动态照片生成 JPEG/MOV 配对，经系统识别后才能完成；保存图库时单独请求添加权限。应用重启后手动继续；删除记录保留原文件和结果。")
                 .font(.footnote).foregroundStyle(.secondary)
-        }.navigationTitle("音视频合轨").sheet(item: $selected) { LocalMovieScreen(url: $0.url) }
+        }.navigationTitle("媒体合轨与拼接").sheet(item: $selected) { LocalMovieScreen(url: $0.url) }
+            .sheet(item: $selectedLivePhoto) { LivePhotoScreen(photoURL: $0.photo, movieURL: $0.movie) }
+            .sheet(item: $exporting) { ExportFilesView(files: $0.files) }
     }
 }
 struct LocalMovieRoute: Identifiable { let id = UUID(); let url: URL }

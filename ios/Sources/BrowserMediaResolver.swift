@@ -32,6 +32,7 @@ enum BrowserMediaPayload {
                 assets.append(MediaAsset(id: "image-\(index)", url: url, previewURL: nil, filename: base + "_\(index + 1)." + ext, label: "平台图片 \(index + 1)/\(images.count)", size: nil, kind: .image, headers: headers))
                 if index < motions.count, !motions[index].isEmpty {
                     guard let motion = MediaNames.secureURL(motions[index]), motion.user == nil, motion.password == nil else { throw CloudError.message("动态照片视频地址无效。") }
+                    assets[assets.count - 1].livePhotoVideoURL = motion
                     assets.append(MediaAsset(id: "motion-\(index)", url: motion, previewURL: nil, filename: base + "_\(index + 1)_motion.mp4", label: "动态照片视频部分（未合成）", size: nil, kind: .video, headers: headers))
                 }
             }

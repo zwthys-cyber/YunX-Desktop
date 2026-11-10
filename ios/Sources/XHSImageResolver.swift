@@ -33,7 +33,7 @@ final class XHSImageResolver {
             try Task.checkCancellation()
             if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), http.mimeType?.lowercased().hasPrefix("image/") == true {
                 let original = MediaAsset(id: asset.id, url: candidate, previewURL: nil, filename: asset.filename,
-                                          label: "原图候选已确认", size: nil, kind: .image, headers: asset.headers)
+                                          label: "原图候选已确认", size: nil, kind: .image, headers: asset.headers, livePhotoVideoURL: asset.livePhotoVideoURL)
                 return (index, original, false)
             }
         } catch { if Task.isCancelled { throw CancellationError() } }

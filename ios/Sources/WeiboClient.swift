@@ -74,6 +74,7 @@ final class WeiboClient {
             assets.append(asset(url, id: "image-\(index)", filename: base + "_\(index + 1)." + ext, label: "原图 \(index + 1)/\(pictures.count)", kind: .image))
             if let rawMotion = picture["videoSrc"] as? String, !rawMotion.isEmpty {
                 guard let motion = MediaNames.secureURL(rawMotion) else { throw CloudError.message("微博动态照片的视频地址无效。") }
+                assets[assets.count - 1].livePhotoVideoURL = motion
                 assets.append(asset(motion, id: "motion-\(index)", filename: base + "_\(index + 1)_motion.mov", label: "动态照片视频部分（未合成）", kind: .video))
             }
         }

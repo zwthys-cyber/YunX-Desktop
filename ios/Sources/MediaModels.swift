@@ -46,7 +46,7 @@ struct MediaLink: Equatable {
     }
 
     static func parseURL(_ url: URL) -> MediaLink? {
-        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.user == nil, url.password == nil,
               let host = url.host?.lowercased() else { return nil }
         let path = url.path.split(separator: "/").map(String.init)
         if ["b23.tv", "bili2233.cn"].contains(host), !path.isEmpty {
@@ -145,6 +145,7 @@ struct MediaAsset: Identifiable {
     let headers: [String: String]
     var isHLS = false
     var audioURL: URL? = nil
+    var livePhotoVideoURL: URL? = nil
 }
 struct MediaResult {
     let title: String
@@ -170,7 +171,7 @@ enum MediaNames {
         if text.hasPrefix("//") { normalized = "https:" + text }
         else if text.lowercased().hasPrefix("http://") { normalized = "https://" + String(text.dropFirst(7)) }
         else { normalized = text }
-        guard let url = URL(string: normalized), url.scheme?.lowercased() == "https", url.host != nil else { return nil }
+        guard let url = URL(string: normalized), url.scheme?.lowercased() == "https", url.host != nil, url.user == nil, url.password == nil else { return nil }
         return url
     }
 

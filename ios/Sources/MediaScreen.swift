@@ -155,6 +155,12 @@ struct MediaScreen: View {
                                     Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered).disabled(asset.audioURL != nil && asset.previewURL == nil)
                                     Button("下载") { model.download([asset], store: downloads, assemblies: assemblies) }
                                         .buttonStyle(.bordered).disabled(model.busy)
+                                    if asset.livePhotoVideoURL != nil {
+                                        Button("生成动态照片") {
+                                            if assemblies.addLivePhoto(asset) { model.notice = "已加入合轨任务，完成后可预览并保存系统动态照片。" }
+                                            else { model.failure = assemblies.storageError }
+                                        }.buttonStyle(.bordered).disabled(model.busy)
+                                    }
                                 }
                             }.padding(.vertical, 3)
                         }
@@ -269,13 +275,15 @@ struct MediaImagePreview: View {
     @State private var image: UIImage?
     @State private var failure: String?
     @State private var scale: CGFloat = 1
+    @GestureState private var magnification: CGFloat = 1
 
     var body: some View {
         Group {
             if let image {
                 ScrollView([.horizontal, .vertical]) {
                     Image(uiImage: image).resizable().scaledToFit()
-                        .frame(width: min(UIScreen.main.bounds.width, 900) * scale)
+                        .frame(width: min(UIScreen.main.bounds.width, 900) * min(5, max(1, scale * magnification)))
+                        .simultaneousGesture(MagnificationGesture().updating($magnification) { value, state, _ in state = value }.onEnded { value in scale = min(5, max(1, scale * value)) })
                         .onTapGesture(count: 2) { scale = scale == 1 ? 2 : 1 }
                 }
             } else if let failure { Text(failure).foregroundStyle(.red).padding() }
