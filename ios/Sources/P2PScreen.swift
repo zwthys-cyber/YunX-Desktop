@@ -157,6 +157,7 @@ struct P2PScreen: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("引擎设置") {
+                NavigationLink("HTTP/2 与读缓冲") { NativeHTTPTransportScreen() }
                 Toggle("DHT（重启应用后生效）", isOn: $dht)
                 Stepper("原生引擎同时传输：\(parallel)", value: $parallel, in: 1...6)
                 Text("同时受「设置与收藏」中的全局传输上限约束。媒体轨道和原生文件任务共用此子上限。")

@@ -43,6 +43,10 @@ cp Engine/runtime_scheduler.go "$engine_temp/gopeed/pkg/base/yunx_runtime_schedu
 cp Engine/runtime_scheduler_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_scheduler_test.go"
 cp Engine/runtime_bandwidth.go "$engine_temp/gopeed/pkg/base/yunx_runtime_bandwidth.go"
 cp Engine/runtime_bandwidth_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_bandwidth_test.go"
+cp Engine/runtime_http_options.go "$engine_temp/gopeed/pkg/base/yunx_runtime_http_options.go"
+cp Engine/runtime_http_options_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_http_options_test.go"
+cp Engine/http_options.go "$engine_temp/gopeed/internal/protocol/http/yunx_http_options.go"
+cp Engine/http_transport_test.go "$engine_temp/gopeed/internal/httpclient/yunx_http_transport_test.go"
 cp Engine/runtime_headers.go "$engine_temp/gopeed/pkg/base/yunx_runtime_headers.go"
 cp Engine/runtime_headers_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_headers_test.go"
 cp Engine/runtime_headers_http_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_runtime_headers_test.go"
@@ -59,6 +63,7 @@ python3 Engine/patch-bandwidth.py "$engine_temp/gopeed"
 python3 Engine/patch-runtime-headers.py "$engine_temp/gopeed"
 python3 Engine/patch-startup-settings.py "$engine_temp/gopeed"
 python3 Engine/patch-expected-size.py "$engine_temp/gopeed"
+python3 Engine/patch-http-options.py "$engine_temp/gopeed"
 cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 engine_retry go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
@@ -66,6 +71,7 @@ engine_retry go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_REV"
 # The pinned mobile tool changes the module graph; finalize all checksums before tests/vendor.
 engine_retry go mod tidy
 go test -mod=mod -tags nosqlite -timeout 1m ./pkg/base -run '^TestYunx' -count=1
+go test -mod=mod -tags nosqlite -timeout 1m ./internal/httpclient -run '^TestYunx' -count=1
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/http \
   -run '^Test(YunxPrefetch.*|YunxRuntimeHeaders.*|YunxExpectedSize.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
 # These upstream end-to-end tests use local httptest servers, not live platforms.

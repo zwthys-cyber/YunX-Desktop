@@ -51,6 +51,7 @@ actor NativeEngine {
         if let startup { return try await startup.value }
         guard !DownloadStorage.isMigrating else { throw DownloadStorageError.busy }
         try Self.applyHTTPBandwidthLimit(UserDefaults.standard.integer(forKey: "engineHTTPRateKiB"))
+        try Self.applyHTTPTransport(NativeHTTPTransportPreference.load())
         _ = try NetworkProxy.current()
         let resolver = IOSProxyResolver()
         proxyResolver = resolver
@@ -106,6 +107,17 @@ actor NativeEngine {
     func setHTTPBandwidthLimit(kibPerSecond: Int) throws {
         try Self.applyHTTPBandwidthLimit(kibPerSecond)
         UserDefaults.standard.set(kibPerSecond, forKey: "engineHTTPRateKiB")
+    }
+    private static func applyHTTPTransport(_ preference: NativeHTTPTransportPreference) throws {
+        var error: NSError?
+        guard YunxengineSetNativeHTTPTransport(preference.http2, preference.bufferKiB, &error) else {
+            throw CloudError.message("原生 HTTP 传输设置未应用。")
+        }
+    }
+    func setHTTPTransport(_ preference: NativeHTTPTransportPreference) throws {
+        try Self.applyHTTPTransport(preference)
+        UserDefaults.standard.set(preference.http2, forKey: "engineHTTP2")
+        UserDefaults.standard.set(preference.bufferKiB, forKey: "engineHTTPBufferKiB")
     }
     func refreshNetworkProxy(profile: NetworkProxyProfile? = nil, startIfNeeded: Bool = false) async throws {
         guard startup != nil || startIfNeeded else { return }

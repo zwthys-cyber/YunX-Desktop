@@ -42,6 +42,7 @@ func SetHeaderResolver(resolver HeaderResolver) error {
 func SetGlobalDownloadLimit(limit int) { base.YunxSetDownloadLimit(max(1, min(6, limit))) }
 func SetHTTPRestoring(value bool) { base.YunxSetHTTPRestoring(value) }
 func SetNativeHTTPBandwidthLimit(bytesPerSecond int64) error { return base.YunxSetNativeHTTPBandwidthLimit(bytesPerSecond) }
+func SetNativeHTTPTransport(http2 bool, bufferKiB int) error { return base.YunxSetNativeHTTPTransport(http2, bufferKiB) }
 func AvailableDownloadSlots() int { return base.YunxAvailableSlots() }
 func AcquireHTTPTask(id string, adopt bool) bool {
     if id == "" || len(id) > 128 { return false }

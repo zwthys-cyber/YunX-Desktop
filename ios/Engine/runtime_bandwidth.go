@@ -78,7 +78,10 @@ func YunxNativeHTTPReader(ctx context.Context, reader io.Reader, stop <-chan str
 
 func (r *yunxBandwidthReader) Read(buffer []byte) (int, error) {
     if err := r.ctx.Err(); err != nil { r.finish(); return 0, err }
-    if len(buffer) > 16*1024 { buffer = buffer[:16*1024] }
+    yunxBandwidth.RLock()
+    limited := yunxBandwidth.limiter != nil
+    yunxBandwidth.RUnlock()
+    if limited && len(buffer) > 16*1024 { buffer = buffer[:16*1024] }
     n, err := r.reader.Read(buffer)
     if n > 0 {
         if waitErr := YunxWaitNativeHTTPBytes(r.ctx, n); waitErr != nil { r.finish(); return 0, waitErr }
