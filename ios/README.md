@@ -6,7 +6,7 @@
 
 ## 操作约束
 
-按仓库使用者最新授权，仅通过 GitHub 接口读取及修改源码，允许 GitHub Actions 编译。不在当前代理服务器下载、处理、验证或编译源码。iOS 构建使用 GitHub 托管 macOS runner，不创建会触发上游 Windows 构建的 PR。也保留用户自行在本地 Mac 构建的方式。
+按仓库使用者最新授权，当前代理服务器可读取、编辑和推送源码，但不编译、不运行测试或验证脚本；编译、自动测试及打包只在 GitHub Actions 执行。iOS 构建使用 GitHub 托管 macOS runner，不创建会触发上游 Windows 构建的 PR。也保留用户自行在本地 Mac 构建的方式。
 
 ## 网盘递归批量下载（本轮新增）
 
