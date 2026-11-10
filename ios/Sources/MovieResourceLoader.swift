@@ -60,7 +60,7 @@ final class MovieResourceLoader: NSObject, AVAssetResourceLoaderDelegate, URLSes
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 30
-        session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        session = NetworkProxy.session(configuration: config, delegate: self, delegateQueue: .main)
     }
 
     func asset() -> AVURLAsset {

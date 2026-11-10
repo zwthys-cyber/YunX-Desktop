@@ -203,7 +203,7 @@ final class CloudClient {
             config.httpShouldSetCookies = false
             config.urlCredentialStorage = nil
             config.timeoutIntervalForRequest = 30
-            self.session = URLSession(configuration: config, delegate: CloudRedirectPolicy(), delegateQueue: nil)
+            self.session = NetworkProxy.session(configuration: config, delegate: CloudRedirectPolicy(), delegateQueue: nil)
         }
         if provider == .pan123 { pan123 = Pan123Client(token: cookie, session: self.session) }
         if provider == .guangya { guangya = GuangYaClient(token: cookie, fields: fields, session: self.session, changed: credentialChanged) }

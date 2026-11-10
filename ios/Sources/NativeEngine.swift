@@ -38,6 +38,7 @@ struct EngineTask: Decodable, Identifiable {
 actor NativeEngine {
     static let shared = NativeEngine()
     private var startup: Task<Void, Error>?
+    private var proxyResolver: IOSProxyResolver?
     private var watchedCompletions = Set<String>()
     private var completionMonitor: Task<Void, Never>?
     private let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX/Engine", isDirectory: true)
@@ -45,10 +46,14 @@ actor NativeEngine {
 
     func ensureStarted() async throws {
         if let startup { return try await startup.value }
+        _ = try NetworkProxy.current()
+        let resolver = IOSProxyResolver()
+        proxyResolver = resolver
         let root = support
         let destination = downloads
         let dht = UserDefaults.standard.bool(forKey: "engineDHT")
         let operation = Task.detached(priority: .utility) {
+            try Self.bindProxy(resolver)
             for folder in [root, destination] {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                     attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
@@ -57,7 +62,7 @@ actor NativeEngine {
                 "apiEnable": false, "mcpEnable": false, "storage": "bolt", "storageDir": root.path,
                 // Gopeed uses filepath.Match, not recursive containment. Every task owns one UUID child.
                 "tempDir": root.appendingPathComponent("Cache").path, "whiteDownloadDirs": [destination.path, destination.path + "/*"],
-                "downloadConfig": ["downloadDir": destination.path, "maxRunning": 3, "autoStartTasks": false,
+                "downloadConfig": ["downloadDir": destination.path, "maxRunning": 3, "autoStartTasks": false, "proxy": ["enable": false],
                     "protocolConfig": ["bt": ["disableDht": !dht, "disablePex": true, "autoUpdateTrackers": false,
                         "customTrackers": [], "trackerSubscribeUrls": [], "seedKeep": false, "seedRatio": 0, "seedTime": 0]]]
             ]
@@ -69,7 +74,19 @@ actor NativeEngine {
         }
         startup = operation
         do { try await operation.value; await Diagnostics.shared.record(.engineStarted) }
-        catch { startup = nil; await Diagnostics.shared.record(.engineStartFailed); throw error }
+        catch { startup = nil; proxyResolver = nil; await Diagnostics.shared.record(.engineStartFailed); throw error }
+    }
+    private static func bindProxy(_ resolver: IOSProxyResolver) throws {
+        var error: NSError?
+        guard YunxengineSetProxyResolver(resolver, &error) else { throw CloudError.message("原生引擎代理配置失败，请重启应用后重试。") }
+    }
+    func refreshNetworkProxy(profile: NetworkProxyProfile? = nil, startIfNeeded: Bool = false) async throws {
+        guard startup != nil || startIfNeeded else { return }
+        try await ensureStarted()
+        let normalized = try profile.map { try $0.validated() }
+        let resolver = IOSProxyResolver(profile: normalized)
+        try await Task.detached(priority: .utility) { try Self.bindProxy(resolver) }.value
+        proxyResolver = resolver
     }
     func invoke(_ method: String, path: String, query: String = "", body: Data? = nil) async throws -> Data {
         try await ensureStarted()

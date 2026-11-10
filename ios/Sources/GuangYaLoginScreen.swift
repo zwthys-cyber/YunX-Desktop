@@ -33,7 +33,7 @@ struct GuangYaLoginScreen: View {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 30
-        let session = URLSession(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
+        let session = NetworkProxy.session(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         do {
             let client = GuangYaClient(session: session)

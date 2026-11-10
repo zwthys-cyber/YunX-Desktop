@@ -83,6 +83,10 @@ jobs:
             ios/build/engine-source-revisions.txt
           key: yunx-engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
 
+      - name: Show generated proxy bridge declarations
+        shell: bash
+        run: rg -n 'ProxyResolver|resolve:|SetProxyResolver' ios/Frameworks/Yunxengine.xcframework --glob '*.h'
+
       - name: Install JDK for desktop backup interoperability fixtures
         uses: actions/setup-java@v4
         with:

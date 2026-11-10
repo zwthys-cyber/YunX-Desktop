@@ -46,6 +46,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
     }
     private var active: [UUID: URLSessionDownloadTask] = [:]
+    private var latestTaskIdentity: [UUID: ObjectIdentifier] = [:]
     private var removed = Set<UUID>()
     private let root: URL
     private let cache: URL
@@ -90,7 +91,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         config.httpShouldSetCookies = false
         config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 60
-        session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        session = NetworkProxy.session(configuration: config, delegate: self, delegateQueue: .main)
         if backgroundEnabled {
             restoringBackground = true
             let background = URLSessionConfiguration.background(withIdentifier: BackgroundDownloadPolicy.identifier)
@@ -152,6 +153,13 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             launch(id)
         }
     }
+    func refreshForegroundNetworking() {
+        let config = URLSessionConfiguration.default
+        config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil; config.timeoutIntervalForRequest = 60
+        let old = session
+        session = NetworkProxy.session(configuration: config, delegate: self, delegateQueue: .main)
+        old?.finishTasksAndInvalidate()
+    }
 
     func pauseAll() {
         for id in items.filter({ [.waiting, .downloading].contains($0.state) }).map(\.id) {
@@ -173,6 +181,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private func launch(_ id: UUID) {
         guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               items[index].state != .completed, items[index].state != .pausing else { return }
+        guard NetworkProxy.ready else { items[index].state = .failed; items[index].error = "代理设置不可用，请到设置中修复后重试。"; save(); return }
         var request = URLRequest(url: items[index].url)
         var headers: [String: String] = [:]
         if items[index].requiresHeaders == true {
@@ -198,6 +207,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
         task.taskDescription = id.uuidString
         active[id] = task
+        latestTaskIdentity[id] = ObjectIdentifier(task)
         items[index].state = .downloading
         items[index].backgroundTransfer = usesBackground
         items[index].error = nil
@@ -222,6 +232,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             guard task.state == .running || task.state == .suspended else { continue }
             guard active[id] == nil else { task.cancel(); continue }
             active[id] = task
+            latestTaskIdentity[id] = ObjectIdentifier(task)
             if restorableBackground.contains(id) {
                 items[index].state = .downloading; items[index].error = nil
                 items[index].received = max(items[index].received, task.countOfBytesReceived)
@@ -243,8 +254,9 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         save()
         task.cancel { [weak self] data in
             DispatchQueue.main.async {
-                guard let self, !self.removed.contains(id),
+                guard let self, !self.removed.contains(id), self.latestTaskIdentity[id] == ObjectIdentifier(task),
                       let index = self.items.firstIndex(where: { $0.id == id }) else { return }
+                guard self.items[index].state != .completed else { return }
                 self.writeResume(data, id: id)
                 self.active.removeValue(forKey: id)
                 self.items[index].state = .paused
@@ -261,6 +273,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard save() else { items = previous; return }
         removed.insert(id)
         active.removeValue(forKey: id)?.cancel()
+        latestTaskIdentity.removeValue(forKey: id)
         try? manager.removeItem(at: resumeURL(id))
         DownloadHeaders.delete(id)
         // 下载完成的文件保留，删除记录不会隐式删除用户文件。
@@ -318,6 +331,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                     totalBytesExpectedToWrite: Int64) {
         guard let value = downloadTask.taskDescription, let id = UUID(uuidString: value),
               let index = items.firstIndex(where: { $0.id == id }) else { return }
+        if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(downloadTask) { return }
+        guard items[index].state != .completed else { return }
         items[index].received = totalBytesWritten
         items[index].expected = totalBytesExpectedToWrite
     }
@@ -326,6 +341,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                     didFinishDownloadingTo location: URL) {
         guard let value = downloadTask.taskDescription, let id = UUID(uuidString: value),
               !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }), items[index].state != .completed else { return }
+        if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(downloadTask) { return }
         guard let response = downloadTask.response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
             let status = (downloadTask.response as? HTTPURLResponse)?.statusCode
@@ -402,7 +418,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         guard let value = task.taskDescription, let id = UUID(uuidString: value) else { return }
-        if let current = active[id], current.taskIdentifier != task.taskIdentifier { return }
+        if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(task) { return }
         active.removeValue(forKey: id)
         defer { drainQueue() }
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }

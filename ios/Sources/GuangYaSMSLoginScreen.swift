@@ -44,7 +44,7 @@ struct GuangYaSMSLoginScreen: View {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 30
-        let session = URLSession(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
+        let session = NetworkProxy.session(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
         let client = GuangYaClient(session: session)
         self.session = session; self.client = client
         return client

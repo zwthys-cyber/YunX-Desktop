@@ -98,7 +98,7 @@ final class GitHubClient {
             let config = URLSessionConfiguration.ephemeral
             config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
             config.timeoutIntervalForRequest = 30
-            self.session = URLSession(configuration: config, delegate: GitHubRedirectPolicy(), delegateQueue: nil)
+            self.session = NetworkProxy.session(configuration: config, delegate: GitHubRedirectPolicy(), delegateQueue: nil)
         }
     }
     deinit { session.invalidateAndCancel() }
@@ -431,13 +431,14 @@ struct GitHubMarkdownView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        _ = NetworkProxy.configure(configuration.websiteDataStore)
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {
-        guard context.coordinator.loaded != html else { return }
+        guard NetworkProxy.ready, context.coordinator.loaded != html else { return }
         context.coordinator.loaded = html
         let document = """
         <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

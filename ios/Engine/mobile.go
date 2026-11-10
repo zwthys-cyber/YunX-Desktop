@@ -5,10 +5,48 @@ package yunxengine
 import (
     "encoding/json"
     "errors"
+    "net"
+    "net/http"
+    "net/url"
+    "strconv"
     "strings"
+    "github.com/GopeedLab/gopeed/pkg/base"
     "github.com/GopeedLab/gopeed/pkg/rest"
     "github.com/GopeedLab/gopeed/pkg/rest/model"
 )
+
+// Implemented by Swift using iOS system proxy settings or the app's Keychain
+// profile. The callback is evaluated per HTTP request and is never serialized.
+type ProxyResolver interface { Resolve(rawURL string) string }
+
+func SetProxyResolver(resolver ProxyResolver) error {
+    if resolver == nil { return errors.New("missing runtime proxy resolver") }
+    base.SetRuntimeProxyResolver(func(request *http.Request) (*url.URL, error) {
+        if request == nil || request.URL == nil { return nil, errors.New("invalid proxy request") }
+        host := request.URL.Hostname()
+        if strings.EqualFold(host, "localhost") { return nil, nil }
+        if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() { return nil, nil }
+        raw := resolver.Resolve(request.URL.String())
+        if len(raw) > 32768 { return nil, errors.New("invalid runtime proxy response") }
+        var value struct {
+            Direct bool `json:"direct"`
+            Error bool `json:"error"`
+            Scheme string `json:"scheme"`
+            Host string `json:"host"`
+            Port int `json:"port"`
+            Username string `json:"username"`
+            Password string `json:"password"`
+        }
+        if json.Unmarshal([]byte(raw), &value) != nil || value.Error { return nil, errors.New("iOS proxy settings unavailable or PAC unsupported") }
+        if value.Direct { return nil, nil }
+        if value.Scheme != "http" && value.Scheme != "https" && value.Scheme != "socks5" { return nil, errors.New("invalid proxy scheme") }
+        if value.Host == "" || len(value.Host) > 253 || strings.ContainsAny(value.Host, "/\\@?# \r\n\t") || value.Port < 1 || value.Port > 65535 { return nil, errors.New("invalid proxy endpoint") }
+        proxy := &url.URL{Scheme: value.Scheme, Host: net.JoinHostPort(value.Host, strconv.Itoa(value.Port))}
+        if value.Username != "" { proxy.User = url.UserPassword(value.Username, value.Password) }
+        return proxy, nil
+    })
+    return nil
+}
 
 func Start(config string) (int, error) {
     var cfg model.StartConfig

@@ -9,7 +9,7 @@ final class XHSImageResolver {
             let config = URLSessionConfiguration.ephemeral
             config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
             config.timeoutIntervalForRequest = 12
-            self.session = URLSession(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
+            self.session = NetworkProxy.session(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
         }
     }
     deinit { session.invalidateAndCancel() }

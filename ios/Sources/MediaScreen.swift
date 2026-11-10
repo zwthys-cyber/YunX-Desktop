@@ -298,7 +298,7 @@ struct MediaImagePreview: View {
                 config.httpShouldSetCookies = false
                 config.urlCredentialStorage = nil
                 config.timeoutIntervalForRequest = 30
-                let session = URLSession(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
+                let session = NetworkProxy.session(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
                 defer { session.invalidateAndCancel() }
                 let (localURL, response) = try await session.download(for: request)
                 defer { try? FileManager.default.removeItem(at: localURL) }

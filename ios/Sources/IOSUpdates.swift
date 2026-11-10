@@ -65,7 +65,7 @@ final class IOSUpdateClient {
         if let session { self.session = session }
         else {
             let config = URLSessionConfiguration.ephemeral; config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil; config.timeoutIntervalForRequest = 15
-            self.session = URLSession(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
+            self.session = NetworkProxy.session(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
         }
     }
     deinit { session.invalidateAndCancel() }

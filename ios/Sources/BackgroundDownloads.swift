@@ -5,7 +5,8 @@ import UserNotifications
 
 enum BackgroundDownloadPolicy {
     static let identifier = "io.github.zwthys.yunx.downloads.v1"
-    static func allows(_ url: URL, headers: [String: String]) -> Bool {
+    static func allows(_ url: URL, headers: [String: String], systemNetworking: Bool = NetworkProxy.supportsBackground) -> Bool {
+        guard systemNetworking else { return false }
         guard url.scheme?.lowercased() == "https", url.host != nil, url.user == nil, url.password == nil else { return false }
         // Background sessions follow redirects without the app's redirect delegate.
         // Keep all account/custom credential headers in the foreground session.

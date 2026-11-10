@@ -21,7 +21,7 @@ final class MediaClient {
             config.httpShouldSetCookies = false
             config.urlCredentialStorage = nil
             config.timeoutIntervalForRequest = 30
-            self.session = URLSession(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
+            self.session = NetworkProxy.session(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
         }
     }
     deinit { session.invalidateAndCancel() }

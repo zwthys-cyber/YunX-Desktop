@@ -177,6 +177,7 @@ private struct ResourceWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration(); config.websiteDataStore = .nonPersistent()
+        _ = NetworkProxy.configure(config.websiteDataStore)
         let view = WKWebView(frame: .zero, configuration: config); view.navigationDelegate = context.coordinator; view.uiDelegate = context.coordinator
         view.customUserAgent = MediaClient.userAgent; view.allowsBackForwardNavigationGestures = true; state.view = view; return view
     }
@@ -186,6 +187,7 @@ private struct ResourceWebView: UIViewRepresentable {
         private let state: ResourceBrowserState
         init(state: ResourceBrowserState) { self.state = state }
         func webView(_ view: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard NetworkProxy.ready else { state.message = "代理设置不可用，请到设置中修复。"; decisionHandler(.cancel); return }
             guard let url = action.request.url, BrowserResource.safeURL(url.absoluteString) != nil || url.absoluteString == "about:blank" else { state.message = "此浏览器只打开 HTTPS 页面。"; decisionHandler(.cancel); return }
             decisionHandler(.allow)
         }

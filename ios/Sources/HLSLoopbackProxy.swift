@@ -71,7 +71,7 @@ actor HLSLoopbackProxy {
         let config = configuration ?? URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 30
-        session = URLSession(configuration: config, delegate: HLSRedirectPolicy(), delegateQueue: nil)
+        session = NetworkProxy.session(configuration: config, delegate: HLSRedirectPolicy(), delegateQueue: nil)
     }
     func start() async throws -> URL {
         guard !closed else { throw CloudError.message("HLS 播放已关闭。") }

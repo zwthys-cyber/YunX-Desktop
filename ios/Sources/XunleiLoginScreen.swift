@@ -55,7 +55,7 @@ struct XunleiLoginScreen: View {
             }
             let config = URLSessionConfiguration.ephemeral
             config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil; config.timeoutIntervalForRequest = 30
-            let session = URLSession(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
+            let session = NetworkProxy.session(configuration: config, delegate: MediaNoRedirect(), delegateQueue: nil)
             defer { session.invalidateAndCancel() }
             let client = XunleiClient(token: credential.access, fields: credential.fields, session: session)
             let name = try await client.validate()
@@ -72,6 +72,7 @@ private struct XunleiAuthWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration(); config.websiteDataStore = .nonPersistent()
+        _ = NetworkProxy.configure(config.websiteDataStore)
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = context.coordinator; view.uiDelegate = context.coordinator
         view.customUserAgent = XunleiProtocol.webAgent; view.allowsBackForwardNavigationGestures = true
@@ -84,6 +85,7 @@ private struct XunleiAuthWebView: UIViewRepresentable {
         let state: WebLoginState
         init(state: WebLoginState) { self.state = state }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard NetworkProxy.ready else { state.failure = "代理设置不可用，请到设置中修复。"; decisionHandler(.cancel); return }
             guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
             if url.absoluteString == "about:blank" || XunleiProtocol.trusted(url) { decisionHandler(.allow) }
             else { state.failure = "此跳转不属于受信任的迅雷 HTTPS 页面，请使用网页内的其他登录方式。"; decisionHandler(.cancel) }

@@ -94,6 +94,7 @@ struct CloudLoginWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
+        _ = NetworkProxy.configure(config.websiteDataStore)
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
@@ -117,6 +118,7 @@ struct CloudLoginWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard NetworkProxy.ready else { state.failure = "代理设置不可用，请到设置中修复。"; decisionHandler(.cancel); return }
             guard navigationAction.request.url?.scheme?.lowercased() == "https" ||
                   navigationAction.request.url?.absoluteString == "about:blank" else {
                 state.failure = "此登录方式需要外部应用或非 HTTPS 页面，请改用网页内的其他登录方式或手动 Cookie。"

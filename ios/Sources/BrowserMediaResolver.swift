@@ -115,6 +115,7 @@ struct BrowserMediaWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
+        _ = NetworkProxy.configure(config.websiteDataStore)
         if route.link.provider == .douyin, let url = Bundle.main.url(forResource: "douyin-hook", withExtension: "js"), let script = try? String(contentsOf: url, encoding: .utf8) {
             config.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
@@ -147,6 +148,7 @@ struct BrowserMediaWebView: UIViewRepresentable {
         let state: BrowserMediaState
         init(provider: MediaProvider, state: BrowserMediaState) { self.provider = provider; self.state = state }
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard NetworkProxy.ready else { state.message = "代理设置不可用，请到设置中修复。"; decisionHandler(.cancel); return }
             guard let url = action.request.url else { decisionHandler(.cancel); return }
             if action.targetFrame?.isMainFrame == false, url.scheme == "https" { decisionHandler(.allow); return }
             if BrowserMediaWebView.allowed(url, provider: provider) || url.absoluteString == "about:blank" { decisionHandler(.allow) }
