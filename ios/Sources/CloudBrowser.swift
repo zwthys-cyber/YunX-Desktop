@@ -120,6 +120,18 @@ final class CloudBrowserModel: ObservableObject {
     }
     func more() async { await load(path: folders, nextPage: page + 1) }
 
+    func manage(_ operation: CloudMutation) async {
+        guard !busy else { return }
+        busy = true; failure = nil; message = nil
+        do {
+            try await client.mutate(operation)
+            message = "操作完成。"
+        } catch is CancellationError { message = "已停止等待；服务端操作可能已提交，请刷新目录确认。" }
+        catch { failure = error.localizedDescription }
+        busy = false
+        if failure == nil && !Task.isCancelled { await reload() }
+    }
+
     private func load(path: [Folder], nextPage: Int) async {
         guard !busy, let folder = path.last else { return }
         guard nextPage <= 200 else { failure = "目录分页已达安全上限。"; canLoadMore = false; return }
@@ -192,10 +204,17 @@ struct CloudBrowserScreen: View {
     @StateObject private var model: CloudBrowserModel
     @State private var action: Task<Void, Never>?
     @State private var confirmBatch = false
+    @State private var renameFile: CloudFile?
+    @State private var name = ""
+    @State private var showName = false
+    @State private var deleteFile: CloudFile?
+    @State private var destinationFile: CloudFile?
+    private let vault: CredentialVault
     @Environment(\.dismiss) private var dismiss
 
     init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore) {
         self.route = route
+        self.vault = vault
         _model = StateObject(wrappedValue: CloudBrowserModel(route: route, vault: vault, downloads: downloads))
     }
 
@@ -209,6 +228,9 @@ struct CloudBrowserScreen: View {
                         Button("返回上级") { action = Task { await model.back() } }.disabled(model.busy)
                     }
                     Button("下载此目录（含子目录）") { confirmBatch = true }.disabled(model.busy)
+                    if route.provider == .guangya, route.share == nil, route.account != nil {
+                        Button("新建文件夹") { renameFile = nil; name = ""; showName = true }.disabled(model.busy)
+                    }
                     if model.busy {
                         ProgressView("正在请求平台…")
                         Button("取消后续操作") { action?.cancel() }
@@ -240,6 +262,15 @@ struct CloudBrowserScreen: View {
                                     .buttonStyle(.bordered).disabled(model.busy)
                             }
                         }
+                        .contextMenu {
+                            if route.provider == .guangya, route.account != nil {
+                                if route.share == nil {
+                                    Button("重命名") { renameFile = file; name = file.name; showName = true }
+                                    Button("移动到…") { destinationFile = file }
+                                    Button("从网盘删除", role: .destructive) { deleteFile = file }
+                                } else { Button("转存到个人网盘…") { destinationFile = file } }
+                            }
+                        }.disabled(model.busy)
                     }
                     if model.canLoadMore {
                         Button("加载更多") { action = Task { await model.more() } }.disabled(model.busy)
@@ -254,9 +285,86 @@ struct CloudBrowserScreen: View {
             .task { await model.reload() }
             .refreshable { await model.reload() }
             .onDisappear { action?.cancel() }
+            .alert(renameFile == nil ? "新建文件夹" : "重命名", isPresented: $showName) {
+                TextField("名称", text: $name)
+                Button("取消", role: .cancel) { }
+                Button("保存") {
+                    let operation: CloudMutation = renameFile.map { .rename(file: $0, name: name) } ?? .createFolder(name: name, parent: model.folders.last?.id ?? "0")
+                    action = Task { await model.manage(operation) }
+                }
+            }
+            .confirmationDialog("从光鸭个人网盘删除所选文件或文件夹？", isPresented: Binding(get: { deleteFile != nil }, set: { if !$0 { deleteFile = nil } }), titleVisibility: .visible, presenting: deleteFile) { file in
+                Button("删除 \(file.name)", role: .destructive) { action = Task { await model.manage(.trash(file: file)) }; deleteFile = nil }
+            }
+            .sheet(item: $destinationFile) { file in
+                CloudDestinationScreen(route: route, vault: vault, excludedID: route.share == nil && file.isDirectory ? file.id : nil) { parent in
+                    destinationFile = nil
+                    let operation: CloudMutation = route.share.map { .save(file: file, share: $0, parent: parent) } ?? .move(file: file, parent: parent)
+                    action = Task { await model.manage(operation) }
+                }
+            }
             .confirmationDialog("将递归加入当前目录下的文件，最多 500 个文件、100 个目录。子目录名称合并到文件名，不创建目录树。", isPresented: $confirmBatch, titleVisibility: .visible) {
                 Button("开始批量下载") { action = Task { await model.downloadCurrentFolder() } }
             }
         }
+    }
+}
+
+@MainActor
+struct CloudDestinationScreen: View {
+    private let client: CloudClient
+    let excludedID: String?
+    let selected: (String) -> Void
+    @State private var path = [CloudBrowserModel.Folder(id: "0", name: "根目录")]
+    @State private var directories: [CloudFile] = []
+    @State private var busy = true
+    @State private var failure: String?
+    @State private var generation = UUID()
+    @Environment(\.dismiss) private var dismiss
+    init(route: CloudRoute, vault: CredentialVault, excludedID: String?, selected: @escaping (String) -> Void) {
+        self.excludedID = excludedID; self.selected = selected
+        client = CloudClient(provider: route.provider, cookie: route.account?.secret ?? "", fields: route.account?.backupFields ?? [:], credentialChanged: { [weak vault] token, fields in
+            guard let id = route.account?.id else { return false }
+            return vault?.updateCredential(id, secret: token, fields: fields) == true
+        })
+    }
+    var body: some View {
+        NavigationStack {
+            List {
+                Text(path.map(\.name).joined(separator: " / ")).font(.footnote)
+                if path.count > 1 { Button("返回上级") { path.removeLast() }.disabled(busy) }
+                if busy { ProgressView("读取个人目录…") }
+                if let failure { Text(failure).foregroundStyle(.red) }
+                ForEach(directories) { folder in
+                    Button { path.append(.init(id: folder.id, name: folder.name)) } label: { Label(folder.name, systemImage: "folder") }
+                        .disabled(busy || folder.id == excludedID)
+                }
+                Button("选择此目录并提交") { selected(path.last?.id ?? "0") }.disabled(busy || failure != nil)
+            }.navigationTitle("目标目录")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+                .task(id: path.last?.id) { await load() }
+        }
+    }
+    private func load() async {
+        let generation = UUID()
+        self.generation = generation
+        busy = true; failure = nil; directories = []
+        defer { if self.generation == generation { busy = false } }
+        let parent = path.last?.id ?? "0"
+        do {
+            var seen = Set<String>()
+            var result: [CloudFile] = []
+            for page in 1...200 {
+                let files = try await client.list(share: nil, parentID: parent, page: page)
+                try Task.checkCancellation()
+                let fresh = files.filter { seen.insert($0.id).inserted }
+                if !files.isEmpty && fresh.isEmpty { throw CloudError.message("目录分页重复，请刷新后重试。") }
+                result.append(contentsOf: fresh.filter(\.isDirectory))
+                guard result.count <= 2000 else { throw CloudError.message("目标目录过多，请在官网整理后重试。") }
+                if files.count < 50 { directories = result; return }
+            }
+            throw CloudError.message("目录分页达到上限，请稍后重试。")
+        } catch is CancellationError { }
+        catch { if self.generation == generation { failure = error.localizedDescription } }
     }
 }

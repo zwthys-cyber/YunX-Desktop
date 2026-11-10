@@ -154,7 +154,7 @@ struct P2PScreen: View {
                         let total = task.meta?.res?.size ?? 0
                         Text(ByteCountFormatter.string(fromByteCount: received, countStyle: .file) + " · " + ByteCountFormatter.string(fromByteCount: task.progress?.speed ?? 0, countStyle: .file) + "/s").font(.caption)
                         if total > 0 { ProgressView(value: min(1, max(0, Double(received) / Double(total)))) }
-                        NavigationLink("Peer 与做种") { P2PPeersScreen(task: task) }.font(.caption)
+                        NavigationLink("连接与任务诊断") { P2PPeersScreen(task: task) }.font(.caption)
                         HStack {
                             if ["running", "wait", "ready"].contains(task.status) {
                                 Button("暂停") { Task { await store.action(task, operation: "pause") } }.buttonStyle(.bordered)
@@ -221,6 +221,14 @@ struct EnginePeerStats: Decodable {
         let peers: [Peer]?
     }
     struct Snapshot: Decodable {
+        struct Connection: Decodable {
+            let downloaded: Int64
+            let total: Int64
+            let completed: Bool
+            let failed: Bool
+            let retryTimes: Int
+        }
+        let connections: [Connection]?
         let seedBytes: Int64?
         let seedRatio: Double?
         let seedTime: Int64?
@@ -244,11 +252,24 @@ struct P2PPeersScreen: View {
                 if let message { Text(message).foregroundStyle(.secondary) }
             }
             if let snapshot = stats?.snapshot {
-                Section("累计做种") {
+                if let connections = snapshot.connections {
+                    Section("HTTP 连接") {
+                        ForEach(Array(connections.enumerated()), id: \.offset) { offset, connection in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("连接 \(offset + 1) · " + (connection.failed ? "失败" : (connection.completed ? "完成" : "传输中")))
+                                Text(ByteCountFormatter.string(fromByteCount: connection.downloaded, countStyle: .file) + " · 重试 \(connection.retryTimes) 次").font(.caption)
+                                if connection.total > 0 { ProgressView(value: min(1, max(0, Double(connection.downloaded) / Double(connection.total)))) }
+                            }
+                        }
+                        Text("进度按引擎返回的平均份额显示；连接可动态分配或接管工作，不代表固定字节区间。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                if snapshot.seedBytes != nil || snapshot.seedRatio != nil || snapshot.seedTime != nil { Section("累计做种") {
                     if let bytes = snapshot.seedBytes { LabeledContent("上传", value: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
                     if let ratio = snapshot.seedRatio { LabeledContent("分享率", value: String(format: "%.2f", ratio)) }
                     if let time = snapshot.seedTime { LabeledContent("做种时长", value: "\(time) 秒") }
-                }
+                } }
             }
             Section("Peer") {
                 ForEach(Array((stats?.runtime?.peers ?? []).enumerated()), id: \.offset) { _, peer in
@@ -260,7 +281,7 @@ struct P2PPeersScreen: View {
                     }
                 }
             }
-        }.navigationTitle("Peer 与做种").task {
+        }.navigationTitle("连接与任务诊断").task {
             while !Task.isCancelled {
                 do {
                     guard let id = task.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), !id.contains("/") else { return }

@@ -25,6 +25,7 @@ struct YunXApp: App {
                         NavigationLink("账号管理") { AccountScreen(vault: vault) }
                         NavigationLink("认证备份") { AccountBackupScreen(vault: vault) }
                         NavigationLink("设置与收藏") { SettingsScreen(downloads: downloads) }
+                        NavigationLink("诊断") { DiagnosticsScreen() }
                     }.navigationTitle("我的")
                 }.tabItem { Label("我的", systemImage: "person.crop.circle") }
                 GitHubScreen(vault: vault, downloads: downloads)
@@ -32,6 +33,7 @@ struct YunXApp: App {
             }
             .environmentObject(library)
             .environmentObject(assemblies)
+            .task { await Diagnostics.shared.record(.appOpened) }
             .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
         }
     }
@@ -103,6 +105,7 @@ struct DownloadScreen: View {
                                 Text("SHA-256: " + digest).font(.caption.monospaced()).textSelection(.enabled)
                             }
                             if let error = item.error { Text(error).font(.caption).foregroundStyle(.red) }
+                            NavigationLink("任务诊断") { DownloadDiagnosticScreen(store: store, id: item.id) }.font(.caption)
                             HStack {
                                 if item.state == .downloading || item.state == .waiting {
                                     Button("暂停") { store.pause(item.id) }.buttonStyle(.bordered)

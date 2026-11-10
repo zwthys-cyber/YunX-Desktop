@@ -27,3 +27,8 @@ xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Debug \
   -derivedDataPath "$test_dir/DerivedData" \
   -resultBundlePath "$PWD/build/TestResults.xcresult" \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
+# Decode an actual iOS-encrypted synthetic fixture with the independent desktop JCE code.
+app_data="$(xcrun simctl get_app_container "$simulator_id" io.github.zwthys.yunx data)"
+backup_fixture="$app_data/Documents/BackupInterop/ios-export-v2.yunx"
+java Fixtures/BackupFixture.java verify "$backup_fixture"
+rm -f -- "$backup_fixture"

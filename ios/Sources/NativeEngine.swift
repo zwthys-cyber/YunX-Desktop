@@ -53,7 +53,8 @@ actor NativeEngine {
             }
             let config: [String: Any] = [
                 "apiEnable": false, "mcpEnable": false, "storage": "bolt", "storageDir": root.path,
-                "tempDir": root.appendingPathComponent("Cache").path, "whiteDownloadDirs": [destination.path],
+                // Gopeed uses filepath.Match, not recursive containment. Every task owns one UUID child.
+                "tempDir": root.appendingPathComponent("Cache").path, "whiteDownloadDirs": [destination.path, destination.path + "/*"],
                 "downloadConfig": ["downloadDir": destination.path, "maxRunning": 3, "autoStartTasks": false,
                     "protocolConfig": ["bt": ["disableDht": !dht, "disablePex": true, "autoUpdateTrackers": false,
                         "customTrackers": [], "trackerSubscribeUrls": [], "seedKeep": false, "seedRatio": 0, "seedTime": 0]]]
@@ -65,8 +66,8 @@ actor NativeEngine {
             guard YunxengineStart(json, &port, &error) else { throw CloudError.message("本机下载引擎启动失败，请检查设备存储或重启应用。") }
         }
         startup = operation
-        do { try await operation.value }
-        catch { startup = nil; throw error }
+        do { try await operation.value; await Diagnostics.shared.record(.engineStarted) }
+        catch { startup = nil; await Diagnostics.shared.record(.engineStartFailed); throw error }
     }
     func invoke(_ method: String, path: String, query: String = "", body: Data? = nil) async throws -> Data {
         try await ensureStarted()
@@ -75,6 +76,7 @@ actor NativeEngine {
             let response = YunxengineInvoke(method, path, query, encoded)
             guard let data = response.data(using: .utf8),
                   let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["code"] as? Int == 0 else {
+                await Diagnostics.shared.record(.engineOperationFailed)
                 throw CloudError.message("引擎拒绝操作，请检查任务状态、资源和网络。")
             }
             return data

@@ -3,6 +3,14 @@ import XCTest
 @testable import YunX
 
 final class AuthBackupTests: XCTestCase {
+    func testWriteSyntheticIOSExportForIndependentJavaVerification() throws {
+        // Fixed synthetic account, never a real Keychain export. Java compares the exact plaintext.
+        let plain = #"{"app":"yunx_auth_backup","version":1,"accounts":[{"platform":"quark","cookie":"test-only-cookie=fixture","nickname":"测试账号"}]}"#
+        let encrypted = try AuthBackup.encrypt(Data(plain.utf8), password: "fixture-密码-123")
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("BackupInterop", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try encrypted.write(to: folder.appendingPathComponent("ios-export-v2.yunx"), options: .atomic)
+    }
     func testDesktopJavaV1AndV2Compatibility() throws {
         let url = try XCTUnwrap(Bundle(for: AuthBackupTests.self).url(forResource: "backup-vectors", withExtension: "json"))
         let vectors = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: url))

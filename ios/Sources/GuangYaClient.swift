@@ -21,6 +21,14 @@ struct GuangYaSMSChallenge {
     let expires: Date
 }
 
+enum CloudMutation {
+    case createFolder(name: String, parent: String)
+    case rename(file: CloudFile, name: String)
+    case move(file: CloudFile, parent: String)
+    case trash(file: CloudFile)
+    case save(file: CloudFile, share: CloudShare, parent: String)
+}
+
 @MainActor
 final class GuangYaClient {
     private let session: URLSession
@@ -57,10 +65,11 @@ final class GuangYaClient {
         let access = Self.first(data, ["access_token", "accessToken"])
         guard !access.isEmpty, !access.contains(where: \.isWhitespace) else { throw CloudError.message("光鸭未返回有效账号令牌。") }
         token = access
+        refreshToken = Self.first(data, ["refresh_token", "refreshToken"])
         _ = try await validate()
         var fields = device.fields
-        fields["refreshToken"] = Self.first(data, ["refresh_token", "refreshToken"])
-        return (access, fields)
+        fields["refreshToken"] = refreshToken
+        return (token, fields)
     }
     func sendSMS(phone: String) async throws -> GuangYaSMSChallenge {
         let digits = phone.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -151,6 +160,55 @@ final class GuangYaClient {
               url.scheme?.lowercased() == "https", url.host != nil, url.user == nil, url.password == nil else { throw CloudError.message("光鸭未返回安全下载地址。") }
         return CloudDownload(url: url, filename: file.name, size: Int64(Self.string(data["size"])) ?? file.size,
                              headers: ["Referer": Self.website + "/", "User-Agent": Self.agent])
+    }
+    func mutate(_ operation: CloudMutation) async throws {
+        let path: String
+        let body: [String: Any]
+        switch operation {
+        case .createFolder(let name, let parent):
+            try Self.validateName(name)
+            path = "/userres/v1/file/create_dir"
+            body = ["parentId": parent == "0" ? "" : parent, "dirName": name, "failIfNameExist": true]
+        case .rename(let file, let name):
+            try Self.validateName(name)
+            path = "/userres/v1/file/rename"; body = ["fileId": file.id, "newName": name]
+        case .move(let file, let parent):
+            guard file.id != parent else { throw CloudError.message("不能将文件夹移动到自身。") }
+            path = "/userres/v1/file/move_file"; body = ["fileIds": [file.id], "parentId": parent == "0" ? "" : parent]
+        case .trash(let file):
+            path = "/userres/v1/file/delete_file"; body = ["fileIds": [file.id]]
+        case .save(let file, let share, let parent):
+            let access = try await shareToken(share)
+            path = "/userres/v1/restore_share"
+            body = ["accessToken": access, "fileIds": [file.id], "parentId": parent == "0" ? "" : parent]
+        }
+        let root = try await request(path, body: body, authenticated: true)
+        let data = root["data"] as? [String: Any] ?? [:]
+        if case .createFolder = operation {
+            guard !Self.first(data, ["fileId", "id"]).isEmpty, Self.string(data["resType"]) != "1" else { throw CloudError.message("光鸭未确认创建文件夹，请刷新后确认。") }
+        }
+        let task = Self.string(data["taskId"])
+        if !task.isEmpty { try await wait(task) }
+    }
+    private func wait(_ id: String) async throws {
+        for _ in 0..<80 {
+            try await Task.sleep(for: .milliseconds(750))
+            let root = try await request("/userres/v1/get_task_status", body: ["taskId": id], authenticated: true)
+            let data = root["data"] as? [String: Any] ?? [:]
+            let status = Self.string(data["status"])
+            if status == "2" {
+                let detail = data["detail"] as? [String: Any] ?? [:]
+                let code = Self.string(detail["code"])
+                guard code.isEmpty || code == "0" else { throw CloudError.message("光鸭操作失败，请刷新目录确认。") }
+                return
+            }
+            if status == "3" { throw CloudError.message("光鸭操作失败，请刷新目录确认。") }
+        }
+        throw CloudError.message("光鸭操作仍在处理中，请稍后刷新确认，避免重复提交。")
+    }
+    private static func validateName(_ name: String) throws {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name != ".", name != "..", name.utf8.count <= 255,
+              !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw CloudError.message("文件名称为空、过长或含无效字符。") }
     }
     private func request(_ path: String, body: [String: Any]?, account: Bool = false, authenticated: Bool = false, extraHeaders: [String: String] = [:], mayRefresh: Bool = true) async throws -> [String: Any] {
         if authenticated && token.isEmpty { throw CloudError.message("请先登录光鸭账号。") }

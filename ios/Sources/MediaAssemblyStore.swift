@@ -148,6 +148,7 @@ final class MediaAssemblyStore: ObservableObject {
             staging = nil
             jobs[final].filename = destination.lastPathComponent
             jobs[final].state = .completed; jobs[final].error = nil; save()
+            await Diagnostics.shared.record(.assemblyCompleted)
         } catch {
             if let staging { try? FileManager.default.removeItem(at: staging) }
             guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
@@ -157,6 +158,7 @@ final class MediaAssemblyStore: ObservableObject {
             jobs[current].state = Task.isCancelled ? .paused : .failed
             jobs[current].error = Task.isCancelled ? nil : "下载或合轨失败，直链可能已过期，分轨文件保留以便重试。"
             save()
+            if !Task.isCancelled { await Diagnostics.shared.record(.assemblyFailed) }
         }
     }
     private static func total(_ values: [Int64]) -> Int64 {

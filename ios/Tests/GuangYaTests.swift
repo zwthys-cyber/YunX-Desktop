@@ -155,4 +155,31 @@ final class GuangYaTests: XCTestCase {
         let (token, _) = try await client.loginSMS(challenge: challenge, code: "123456", allowRegistration: true)
         XCTAssertEqual(token, "test-access")
     }
+    func testShareSaveSeparatesAccountAndShareTokensAndWaitsForTask() async throws {
+        MediaMockProtocol.handler = { request in
+            let body = try Self.body(request)
+            if request.url?.path == "/userres/v1/get_share_access_token" {
+                XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+                return (200, [:], ["code": 0, "data": ["accessToken": "share-access"]])
+            }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer account-access")
+            if request.url?.path == "/userres/v1/restore_share" {
+                XCTAssertEqual(body["accessToken"] as? String, "share-access")
+                XCTAssertEqual(body["fileIds"] as? [String], ["source-file"])
+                XCTAssertEqual(body["parentId"] as? String, "target-folder")
+                return (200, [:], ["code": 0, "data": ["taskId": "save-task"]])
+            }
+            XCTAssertEqual(request.url?.path, "/userres/v1/get_task_status")
+            XCTAssertEqual(body["taskId"] as? String, "save-task")
+            return (200, [:], ["code": 0, "data": ["status": 2, "detail": ["code": 0]]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let file = CloudFile(id: "source-file", name: "test.bin", size: 10, isDirectory: false, parentID: "", token: "")
+        let client = CloudClient(provider: .guangya, cookie: "account-access", session: session())
+        try await client.mutate(.save(file: file, share: CloudShare(provider: .guangya, shareID: "share", passcode: ""), parent: "target-folder"))
+        do {
+            try await client.mutate(.rename(file: file, name: "../invalid"))
+            XCTFail("Invalid filename must be rejected before network mutation")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("名称")) }
+    }
 }

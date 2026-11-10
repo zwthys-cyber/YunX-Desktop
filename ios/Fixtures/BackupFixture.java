@@ -2,6 +2,9 @@
 // Independent Java reference using the desktop backup's actual JCE primitives.
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Arrays;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import javax.crypto.Cipher;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
@@ -12,6 +15,24 @@ class BackupFixture {
     public static void main(String[] args) throws Exception {
         String plain = "{\"app\":\"yunx_auth_backup\",\"version\":1,\"accounts\":[{\"platform\":\"quark\",\"cookie\":\"test-only-cookie=fixture\",\"nickname\":\"测试账号\"}]}";
         String password = "fixture-密码-123";
+        if (args.length == 2 && args[0].equals("verify")) {
+            byte[] payload = Base64.getDecoder().decode(Files.readString(Path.of(args[1])).trim());
+            byte[] magic = "YUNX_AUTH_V2".getBytes(StandardCharsets.UTF_8);
+            if (payload.length < magic.length + 16 + 12 + 16 || !Arrays.equals(magic, Arrays.copyOfRange(payload, 0, magic.length)))
+                throw new IllegalStateException("iOS export is not a complete V2 backup");
+            byte[] salt = Arrays.copyOfRange(payload, magic.length, magic.length + 16);
+            byte[] iv = Arrays.copyOfRange(payload, magic.length + 16, magic.length + 28);
+            byte[] encrypted = Arrays.copyOfRange(payload, magic.length + 28, payload.length);
+            PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 210000, 256);
+            byte[] key = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, iv));
+            String decoded = new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+            if (!decoded.equals(plain)) throw new IllegalStateException("iOS export plaintext differs from independent desktop fixture");
+            System.out.println("Verified iOS V2 backup using desktop Java PBKDF2/AES-GCM");
+            return;
+        }
+        if (args.length != 0) throw new IllegalArgumentException("Expected no arguments or verify <fixture>");
         System.out.print("{\"v1\":\"" + encrypt(plain, password, 1) + "\",\"v2\":\"" + encrypt(plain, password, 2) + "\"}");
     }
     static String encrypt(String plain, String password, int version) throws Exception {

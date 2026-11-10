@@ -149,6 +149,11 @@ final class CloudClient {
         return nickname
     }
 
+    func mutate(_ operation: CloudMutation) async throws {
+        guard let guangya else { throw CloudError.message("该平台的文件管理尚未接入。") }
+        try await guangya.mutate(operation)
+    }
+
     private func shareToken(_ share: CloudShare) async throws -> String {
         guard share.provider == provider else { throw CloudError.message("分享平台与当前账号不一致。") }
         let key = CloudShareKey(id: share.shareID, code: share.passcode)

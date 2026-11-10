@@ -126,6 +126,9 @@ final class NativeHTTPTests: XCTestCase {
                     let file = try XCTUnwrap(NativeEngine.shared.completedFiles(task).first)
                     XCTAssertEqual(try Data(contentsOf: file), content)
                     XCTAssertTrue(fixture.usedNonzeroRange)
+                    let snapshot = try await NativeEngine.shared.invoke("GET", path: "/api/v1/tasks/" + id + "/stats")
+                    let stats = try JSONDecoder().decode(EngineEnvelope<EnginePeerStats>.self, from: snapshot).data
+                    XCTAssertFalse(try XCTUnwrap(stats?.snapshot?.connections).isEmpty)
                 } else {
                     XCTAssertEqual(task.status, "error")
                     XCTAssertTrue(NativeEngine.shared.completedFiles(task).isEmpty)

@@ -96,6 +96,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
         storageError = nil
         items.insert(item, at: 0)
+        Task { await Diagnostics.shared.record(.downloadAdded) }
         save()
         start(item.id)
         return true
@@ -253,6 +254,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
               !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
         guard let response = downloadTask.response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
+            let status = (downloadTask.response as? HTTPURLResponse)?.statusCode
+            Task { await Diagnostics.shared.record(.downloadFailed, code: status) }
             items[index].state = .failed
             items[index].error = "服务器未返回成功的 HTTP 状态"
             save()
@@ -284,9 +287,12 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             items[index].received = (try destination.resourceValues(forKeys: [.fileSizeKey])).fileSize.map(Int64.init) ?? items[index].received
             try? manager.removeItem(at: resumeURL(id))
             DownloadHeaders.delete(id)
+            let size = items[index].received
+            Task { await Diagnostics.shared.record(.downloadCompleted, bytes: size) }
         } catch {
             items[index].state = .failed
             items[index].error = "无法保存文件：\(error.localizedDescription)"
+            Task { await Diagnostics.shared.record(.downloadFailed) }
         }
         save()
     }
@@ -324,6 +330,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         if items[index].state == .paused, let cancellation = error as NSError?,
            cancellation.domain == NSURLErrorDomain, cancellation.code == NSURLErrorCancelled { return }
         if let error = error as NSError? {
+            let code = error.code
+            Task { await Diagnostics.shared.record(.downloadFailed, code: code) }
             writeResume(error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, id: id)
             items[index].state = .failed
             // 不展示 NSError 描述，避免把带有凭证的完整请求 URL 显示或记录。
