@@ -48,6 +48,7 @@ cp Engine/runtime_headers_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_hea
 cp Engine/runtime_headers_http_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_runtime_headers_test.go"
 cp Engine/runtime_startup.go "$engine_temp/gopeed/pkg/base/yunx_runtime_startup.go"
 cp Engine/runtime_startup_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_startup_test.go"
+cp Engine/expected_size_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_expected_size_test.go"
 cp Engine/downloader_scheduler.go "$engine_temp/gopeed/pkg/download/yunx_scheduler.go"
 cp Engine/rest_storage.go "$engine_temp/gopeed/pkg/rest/yunx_storage.go"
 cp Engine/prefetch_integrity_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_prefetch_integrity_test.go"
@@ -57,6 +58,7 @@ python3 Engine/patch-prefetch-integrity.py "$engine_temp/gopeed"
 python3 Engine/patch-bandwidth.py "$engine_temp/gopeed"
 python3 Engine/patch-runtime-headers.py "$engine_temp/gopeed"
 python3 Engine/patch-startup-settings.py "$engine_temp/gopeed"
+python3 Engine/patch-expected-size.py "$engine_temp/gopeed"
 cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 engine_retry go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
@@ -65,7 +67,7 @@ engine_retry go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_REV"
 engine_retry go mod tidy
 go test -mod=mod -tags nosqlite -timeout 1m ./pkg/base -run '^TestYunx' -count=1
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/http \
-  -run '^Test(YunxPrefetch.*|YunxRuntimeHeaders.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
+  -run '^Test(YunxPrefetch.*|YunxRuntimeHeaders.*|YunxExpectedSize.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
 # These upstream end-to-end tests use local httptest servers, not live platforms.
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
 engine_retry gomobile init

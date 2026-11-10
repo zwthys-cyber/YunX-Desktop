@@ -141,11 +141,17 @@ final class CloudBrowserModel: ObservableObject {
     private let client: CloudClient
     private let share: CloudShare?
     private let downloads: DownloadStore
+    private let accountAvailable: () -> Bool
 
     init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore) {
         share = route.share
         self.downloads = downloads
-        client = CloudClient(provider: route.provider, cookie: route.account?.secret ?? "", fields: route.account?.backupFields ?? [:],
+        let current = route.account.flatMap { saved in vault.accounts.first { $0.id == saved.id && $0.platform == route.provider.rawValue } }
+        accountAvailable = { [weak vault] in
+            guard let id = route.account?.id else { return true }
+            return vault?.accounts.contains { $0.id == id && $0.platform == route.provider.rawValue } == true
+        }
+        client = CloudClient(provider: route.provider, cookie: current?.secret ?? "", fields: current?.backupFields ?? [:],
                              credentialChanged: { [weak vault] token, fields in
             guard let id = route.account?.id else { return false }
             return vault?.updateCredential(id, secret: token, fields: fields) == true
@@ -201,47 +207,62 @@ final class CloudBrowserModel: ObservableObject {
         catch { failure = error.localizedDescription }
     }
 
-    func downloadCurrentFolder() async {
+    private func checkDownloadAccount() throws {
+        guard accountAvailable() else { throw CloudError.message("所选账号已移除，请关闭目录并重新选择账号。") }
+    }
+    private func enqueue(_ result: CloudDownload, filename: String? = nil, nativeConnections: Int?) async throws -> Bool {
+        try checkDownloadAccount()
+        if let nativeConnections {
+            let plan = CloudDownload(url: result.url, filename: filename ?? result.filename, size: result.size, headers: result.headers)
+            _ = try await NativeEngine.shared.createAuthenticatedHTTPS(plan, connections: nativeConnections)
+            return true
+        }
+        return downloads.add(result.url, filename: filename ?? result.filename, headers: result.headers, expectedSize: result.size)
+    }
+    func downloadCurrentFolder(nativeConnections: Int? = nil) async {
         guard !busy, let folder = folders.last else { return }
         busy = true; failure = nil; message = "正在枚举文件夹…"
         defer { busy = false }
         var added = 0
         var failed = 0
         do {
+            try checkDownloadAccount()
             let batch = try await CloudFolderCollector().collectPages(rootID: folder.id) { parent, page in
                 try await self.client.listPage(share: self.share, parentID: parent, page: page)
             }
             for item in batch {
                 try Task.checkCancellation()
                 do {
+                    try checkDownloadAccount()
                     let result = try await client.download(file: item.file, share: share)
                     try Task.checkCancellation()
                     // Keep the download store's flat layout while retaining the folder names in the filename.
                     let name = (item.relativeFolders + [result.filename]).joined(separator: "_")
-                    if downloads.add(result.url, filename: name, headers: result.headers, expectedSize: result.size) {
+                    if try await enqueue(result, filename: name, nativeConnections: nativeConnections) {
                         added += 1
                     } else { failed += 1 }
                 } catch is CancellationError { throw CancellationError() }
                 catch { failed += 1 }
                 message = "已加入 \(added) 个，失败 \(failed) 个（共 \(batch.count) 个）"
             }
-            message = batch.isEmpty ? "文件夹没有可下载的文件。" : "批量处理结束：已加入 \(added) 个，失败 \(failed) 个。"
+            message = batch.isEmpty ? "文件夹没有可下载的文件。" : "批量处理结束：已加入 \(added) 个，失败 \(failed) 个。" + (nativeConnections == nil ? "" : "请到下载页的原生引擎任务查看。")
         } catch is CancellationError {
             message = "已取消后续添加；已加入 \(added) 个任务，可在下载页暂停。"
         } catch { message = nil; failure = error.localizedDescription }
     }
 
-    func download(_ file: CloudFile) async {
+    func download(_ file: CloudFile, nativeConnections: Int? = nil) async {
         guard !busy else { return }
         busy = true
         failure = nil
         message = nil
         defer { busy = false }
         do {
+            try checkDownloadAccount()
             let result = try await client.download(file: file, share: share)
             try Task.checkCancellation()
-            if downloads.add(result.url, filename: result.filename, headers: result.headers, expectedSize: result.size) {
-                message = "已加入下载：\(file.name)，请到「下载」查看。"
+            if try await enqueue(result, nativeConnections: nativeConnections) {
+                message = nativeConnections == nil ? "已加入下载：\(file.name)，请到「下载」查看。" : "已加入原生下载：\(file.name)，请到「下载 → 原生引擎任务」查看。"
             } else { failure = downloads.storageError ?? "创建下载任务失败。" }
         } catch is CancellationError { }
         catch { failure = error.localizedDescription }
@@ -260,18 +281,30 @@ struct CloudBrowserScreen: View {
     @State private var showName = false
     @State private var deleteFile: CloudFile?
     @State private var destinationFile: CloudFile?
+    @State private var nativeFile: CloudFile?
+    @AppStorage("cloudNativeHTTP") private var nativeHTTP = false
+    @AppStorage private var nativeConnections: Int
     private let vault: CredentialVault
     @Environment(\.dismiss) private var dismiss
 
     init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore) {
         self.route = route
         self.vault = vault
+        _nativeConnections = AppStorage(wrappedValue: 4, "cloudHTTPConnections." + route.provider.rawValue)
         _model = StateObject(wrappedValue: CloudBrowserModel(route: route, vault: vault, downloads: downloads))
     }
 
     var body: some View {
         NavigationStack {
             List {
+                Section("文件传输") {
+                    Toggle("原生多连接（前台）", isOn: $nativeHTTP)
+                    if nativeHTTP {
+                        Stepper("\(route.provider.rawValue)连接数：\(nativeConnections)", value: $nativeConnections, in: 1...512)
+                        Text("凭证保存在钥匙串；多个原生文件共享原生 HTTP 限速。系统会话的后台策略不适用于此模式。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 Section {
                     Text(model.folders.map(\.name).joined(separator: " / "))
                         .font(.footnote).foregroundStyle(.secondary)
@@ -320,7 +353,7 @@ struct CloudBrowserScreen: View {
                                 } else if route.provider == .lanzou, route.share == nil {
                                     Button("生成分享并下载") { shareDownloadFile = file }.buttonStyle(.bordered).disabled(model.busy)
                                 } else {
-                                    Button("下载") { action = Task { await model.download(file) } }
+                                    Button("下载") { startDownload(file) }
                                         .buttonStyle(.bordered).disabled(model.busy)
                                 }
                             }
@@ -344,9 +377,13 @@ struct CloudBrowserScreen: View {
                 }
             }
             .confirmationDialog("生成公开分享链接？", isPresented: Binding(get: { shareDownloadFile != nil }, set: { if !$0 { shareDownloadFile = nil } }), titleVisibility: .visible, presenting: shareDownloadFile) { file in
-                Button("生成分享并下载") { action = Task { await model.download(file) }; shareDownloadFile = nil }
+                Button("生成分享并下载") { startDownload(file, approvedConnections: true); shareDownloadFile = nil }
                 Button("取消", role: .cancel) { shareDownloadFile = nil }
-            } message: { _ in Text("此操作将通过蓝奏官网为该文件生成公开分享链接，随后下载；链接可在官网管理或撤销。") }
+            } message: { _ in Text("此操作将通过蓝奏官网为该文件生成公开分享链接，随后下载；链接可在官网管理或撤销。" + connectionNotice) }
+            .confirmationDialog("使用 \(nativeConnections) 个原生连接下载？", isPresented: Binding(get: { nativeFile != nil }, set: { if !$0 { nativeFile = nil } }), titleVisibility: .visible, presenting: nativeFile) { file in
+                Button("确认下载") { startDownload(file, approvedConnections: true); nativeFile = nil }
+                Button("取消", role: .cancel) { nativeFile = nil }
+            } message: { _ in Text(connectionNotice) }
             .navigationTitle(route.share == nil ? "\(route.provider.rawValue)网盘" : "\(route.provider.rawValue)分享")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
             .task { await model.reload() }
@@ -371,9 +408,17 @@ struct CloudBrowserScreen: View {
                 }
             }
             .confirmationDialog("将递归加入当前目录下的文件，最多 500 个文件、100 个目录。子目录名称合并到文件名，不创建目录树。", isPresented: $confirmBatch, titleVisibility: .visible) {
-                Button("开始批量下载") { action = Task { await model.downloadCurrentFolder() } }
-            }
+                Button("开始批量下载") { action = Task { await model.downloadCurrentFolder(nativeConnections: nativeHTTP ? nativeConnections : nil) } }
+            } message: { Text(connectionNotice) }
         }
+    }
+    private var connectionNotice: String {
+        guard nativeHTTP else { return "使用系统下载会话，按文件鉴权情况选择前台或后台。" }
+        return "每个原生文件使用 \(nativeConnections) 个连接。" + (nativeConnections > 32 ? "超过 32 个连接可能导致平台限流、耗电和内存压力，请确认后继续。" : "任务在前台运行。")
+    }
+    private func startDownload(_ file: CloudFile, approvedConnections: Bool = false) {
+        if nativeHTTP && nativeConnections > 32 && !approvedConnections { nativeFile = file; return }
+        action = Task { await model.download(file, nativeConnections: nativeHTTP ? nativeConnections : nil) }
     }
 }
 

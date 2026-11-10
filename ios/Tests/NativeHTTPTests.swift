@@ -141,6 +141,18 @@ final class NativeHTTPFixture {
 
 @MainActor
 final class NativeHTTPTests: XCTestCase {
+    func testPrivateRequestBodyContainsOnlyCredentialIDAndExpectedSize() throws {
+        let context = UUID()
+        let request = try NativeHTTPSRequest(text: "https://files.example.test/private.bin", headers: ["Authorization": "Bearer private-body-fixture"], accountHeaders: true, expectedSize: 123456)
+        XCTAssertThrowsError(try request.body(folder: URL(fileURLWithPath: "/tmp/fixture")))
+        let data = try request.body(folder: URL(fileURLWithPath: "/tmp/fixture"), headerContext: context)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("private-body-fixture"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let req = try XCTUnwrap(root["req"] as? [String: Any])
+        let labels = try XCTUnwrap(req["labels"] as? [String: String])
+        XCTAssertEqual(labels[NativeRequestHeaders.label], context.uuidString)
+        XCTAssertEqual(labels["yunxExpectedSize"], "123456")
+    }
     func testNativeRequestRejectsUnsafeURLsAndInvalidChecksums() throws {
         XCTAssertThrowsError(try NativeHTTPSRequest(text: "http://example.test/file"))
         XCTAssertThrowsError(try NativeHTTPSRequest(text: "https://user:password@example.test/file"))

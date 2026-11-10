@@ -213,7 +213,9 @@ actor NativeEngine {
     }
     @discardableResult
     func createHTTPS(_ request: NativeHTTPSRequest) async throws -> String {
+        try Task.checkCancellation()
         try await ensureStarted()
+        try Task.checkCancellation()
         let folder = downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let privateRequest = request.headers.keys.contains { ["cookie", "authorization"].contains($0.lowercased()) }
         let context = privateRequest ? UUID() : nil
@@ -222,6 +224,10 @@ actor NativeEngine {
             let data = try await invoke("POST", path: "/api/v1/tasks", body: request.body(folder: folder, headerContext: context))
             guard let id = try JSONDecoder().decode(EngineEnvelope<String>.self, from: data).data else { throw CloudError.message("引擎未返回任务 ID。") }
             if let context { headerContextsByTask[id] = context }
+            if Task.isCancelled {
+                _ = try? await invoke("DELETE", path: "/api/v1/tasks/" + id, query: "force=true")
+                throw CancellationError()
+            }
             return id
         } catch {
             if let context { NativeRequestHeaders.shared.delete(context) }
@@ -231,7 +237,7 @@ actor NativeEngine {
     @discardableResult
     func createAuthenticatedHTTPS(_ plan: CloudDownload, connections: Int) async throws -> String {
         let request = try NativeHTTPSRequest(text: plan.url.absoluteString, filename: plan.filename,
-                                            connections: connections, headers: plan.headers, accountHeaders: true)
+                                            connections: connections, headers: plan.headers, accountHeaders: true, expectedSize: plan.size)
         return try await createHTTPS(request)
     }
     func createHLS(_ asset: MediaAsset) async throws {

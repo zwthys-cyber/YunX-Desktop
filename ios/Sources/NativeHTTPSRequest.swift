@@ -8,7 +8,8 @@ struct NativeHTTPSRequest {
     let checksum: String?
     let headers: [String: String]
     let labels: [String: String]
-    init(text: String, filename: String = "", connections: Int = 4, checksum: String = "", headers: [String: String] = [:], labels: [String: String] = [:], accountHeaders: Bool = false) throws {
+    let expectedSize: Int64?
+    init(text: String, filename: String = "", connections: Int = 4, checksum: String = "", headers: [String: String] = [:], labels: [String: String] = [:], accountHeaders: Bool = false, expectedSize: Int64? = nil) throws {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme?.lowercased() == "https",
               url.host != nil, url.user == nil, url.password == nil, url.pathExtension.lowercased() != "m3u8" else {
             throw CloudError.message("请输入不含账号密码的 HTTPS 文件直链；HLS 请从媒体解析加入。")
@@ -26,14 +27,19 @@ struct NativeHTTPSRequest {
         let name = filename.trimmingCharacters(in: .whitespacesAndNewlines)
         self.filename = name.isEmpty ? nil : FileNamePolicy.name(name)
         self.connections = connections; self.checksum = digest.isEmpty ? nil : digest; self.headers = headers; self.labels = labels
+        self.expectedSize = expectedSize.flatMap { $0 > 0 ? $0 : nil }
     }
     func body(folder: URL, headerContext: UUID? = nil) throws -> Data {
+        let privateHeaders = headers.keys.contains { ["cookie", "authorization"].contains($0.lowercased()) }
+        guard !privateHeaders || headerContext != nil else { throw CloudError.message("账号请求头必须通过钥匙串上下文提供。") }
         var extra: [String: Any] = ["connections": connections, "autoTorrent": false, "autoExtract": false]
         if let checksum { extra["checksum"] = ["algorithm": "sha256", "expected": checksum] }
         var options: [String: Any] = ["path": folder.path, "extra": extra, "skipAutoCategorize": true]
         if let filename { options["name"] = filename }
         var requestLabels = labels
         requestLabels.removeValue(forKey: NativeRequestHeaders.label)
+        requestLabels.removeValue(forKey: "yunxExpectedSize")
+        if let expectedSize { requestLabels["yunxExpectedSize"] = String(expectedSize) }
         if let headerContext { requestLabels[NativeRequestHeaders.label] = headerContext.uuidString }
         return try JSONSerialization.data(withJSONObject: ["req": ["url": url.absoluteString, "labels": requestLabels,
                                                                   "extra": ["method": "GET", "header": headerContext == nil ? headers : [:]]], "opts": options])
