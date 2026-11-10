@@ -45,11 +45,11 @@ final class MediaClient {
         return "Pixiv 已登录"
     }
 
-    func resolve(_ link: MediaLink, cookie: String = "", part: Int? = nil, quality: Int? = nil) async throws -> MediaResult {
+    func resolve(_ link: MediaLink, cookie: String = "", part: Int? = nil, quality: Int? = nil, preferDASH: Bool = false) async throws -> MediaResult {
         let target: MediaLink
         if link.isShort { target = try await expand(link) } else { target = link }
         switch target.provider {
-        case .bilibili: return try await bilibili(target, cookie: cookie, part: part ?? target.part, quality: quality)
+        case .bilibili: return try await bilibili(target, cookie: cookie, part: part ?? target.part, quality: quality, preferDASH: preferDASH)
         case .pixiv: return try await pixiv(target, cookie: cookie)
         case .weibo: return try await WeiboClient(session: session).resolve(target, cookie: cookie)
         case .kuaishou: return try await KuaishouClient(session: session).resolve(target, cookie: cookie)
@@ -81,7 +81,7 @@ final class MediaClient {
         throw CloudError.message("短链跳转次数过多，请使用完整作品链接。")
     }
 
-    private func bilibili(_ link: MediaLink, cookie: String, part: Int, quality: Int?) async throws -> MediaResult {
+    private func bilibili(_ link: MediaLink, cookie: String, part: Int, quality: Int?, preferDASH: Bool) async throws -> MediaResult {
         let queryKey = link.id.lowercased().hasPrefix("bv") ? "bvid" : "aid"
         let identifier = queryKey == "aid" ? String(link.id.dropFirst(2)) : "BV" + String(link.id.dropFirst(2))
         let view = try await json(apiURL("/x/web-interface/view", query: [queryKey: identifier]),
@@ -101,6 +101,15 @@ final class MediaClient {
         }
         guard let selected = parts.first(where: { $0.id == part }) else {
             throw CloudError.message("该分 P 不存在，请检查链接中的 p 参数。")
+        }
+        var fallbackNotice: String?
+        if preferDASH && !cookie.isEmpty {
+            do { return try await bilibiliDASH(data: data, bvid: bvid, selected: selected, parts: parts, cookie: cookie, quality: quality) }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                try Task.checkCancellation()
+                fallbackNotice = "平台未返回适配的 DASH 音视频分轨，已回退单文件流；画质以实际结果为准。"
+            }
         }
         let play = try await json(apiURL("/x/player/playurl", query: [
             "bvid": bvid, "cid": String(selected.cid), "qn": String(quality ?? 80),
@@ -135,9 +144,51 @@ final class MediaClient {
         if qualities.isEmpty { qualities = [MediaQuality(id: actualQuality, title: MediaNames.quality(actualQuality))] }
         var seen = Set<Int>()
         qualities = qualities.filter { seen.insert($0.id).inserted }.sorted { $0.id > $1.id }
-        return MediaResult(title: title, author: (data["owner"] as? [String: Any])?["name"] as? String ?? "",
+        var result = MediaResult(title: title, author: (data["owner"] as? [String: Any])?["name"] as? String ?? "",
                            source: URL(string: "https://www.bilibili.com/video/\(bvid)?p=\(part)")!,
                            assets: assets, parts: parts, qualities: qualities, selectedPart: part, actualQuality: actualQuality)
+        result.notice = fallbackNotice
+        return result
+    }
+
+    private func bilibiliDASH(data: [String: Any], bvid: String, selected: MediaPart, parts: [MediaPart], cookie: String, quality: Int?) async throws -> MediaResult {
+        let root = try await json(apiURL("/x/player/playurl", query: ["bvid": bvid, "cid": String(selected.cid), "qn": String(quality ?? 120), "fnval": "4048", "fnver": "0", "fourk": "1"]), provider: .bilibili, cookie: cookie)
+        guard let play = root["data"] as? [String: Any], let dash = play["dash"] as? [String: Any],
+              let videos = dash["video"] as? [[String: Any]], let audios = dash["audio"] as? [[String: Any]] else { throw CloudError.message("B 站没有返回音视频分轨。") }
+        let supported = videos.filter {
+            let codec = ($0["codecs"] as? String ?? "").lowercased()
+            let id = ($0["codecid"] as? NSNumber)?.intValue ?? 0
+            return id == 7 || id == 12 || codec.hasPrefix("avc1") || codec.hasPrefix("hev1") || codec.hasPrefix("hvc1")
+        }
+        let ids = Set(supported.compactMap { ($0["id"] as? NSNumber)?.intValue }.filter { $0 > 0 }).sorted(by: >)
+        guard let actual = ids.first(where: { $0 <= (quality ?? Int.max) }) ?? ids.last else { throw CloudError.message("B 站没有适配的分轨画质。") }
+        let matching = supported.filter { ($0["id"] as? NSNumber)?.intValue == actual }
+        guard let video = matching.first(where: { ($0["codecid"] as? NSNumber)?.intValue == 7 || ($0["codecs"] as? String ?? "").hasPrefix("avc1") }) ?? matching.first else { throw CloudError.message("B 站视频轨道缺失。") }
+        let aac = audios.filter {
+            let codec = ($0["codecs"] as? String ?? "").lowercased()
+            let id = ($0["id"] as? NSNumber)?.intValue ?? 0
+            return codec.hasPrefix("mp4a") || (codec.isEmpty && [30216, 30232, 30280].contains(id))
+        }
+        guard let audio = aac.max(by: { (($0["bandwidth"] as? NSNumber)?.int64Value ?? 0) < (($1["bandwidth"] as? NSNumber)?.int64Value ?? 0) }) else { throw CloudError.message("B 站未返回适配的 AAC 音轨。") }
+        func trackURL(_ track: [String: Any]) -> URL? {
+            let primary = track["baseUrl"] as? String ?? track["base_url"] as? String
+            let backup = track["backupUrl"] as? [String] ?? track["backup_url"] as? [String] ?? []
+            let urls = ([primary].compactMap { $0 } + backup).compactMap(MediaNames.secureURL)
+            return urls.first(where: { !($0.host ?? "").contains("mcdn") }) ?? urls.first
+        }
+        guard let videoURL = trackURL(video), let audioURL = trackURL(audio) else { throw CloudError.message("B 站分轨缺少下载地址。") }
+        var preview: URL?
+        do {
+            let single = try await json(apiURL("/x/player/playurl", query: ["bvid": bvid, "cid": String(selected.cid), "qn": "80", "fnval": "1", "fnver": "0", "platform": "html5", "high_quality": "1"]), provider: .bilibili, cookie: cookie)
+            if let segments = (single["data"] as? [String: Any])?["durl"] as? [[String: Any]], segments.count == 1, let raw = segments[0]["url"] as? String { preview = MediaNames.secureURL(raw) }
+        } catch { try Task.checkCancellation() }
+        let title = data["title"] as? String ?? bvid
+        let name = MediaNames.filename(title, fallback: bvid) + (parts.count > 1 ? "_P\(selected.id)" : "")
+        let asset = MediaAsset(id: "dash-\(selected.cid)-\(actual)", url: videoURL, previewURL: preview, filename: name + "_" + MediaNames.quality(actual) + ".mp4",
+                               label: MediaNames.quality(actual) + " · DASH 合轨", size: nil, kind: .video,
+                               headers: ["Referer": MediaProvider.bilibili.origin, "User-Agent": Self.userAgent], audioURL: audioURL)
+        return MediaResult(title: title, author: (data["owner"] as? [String: Any])?["name"] as? String ?? "", source: URL(string: "https://www.bilibili.com/video/\(bvid)?p=\(selected.id)")!,
+                           assets: [asset], parts: parts, qualities: ids.map { MediaQuality(id: $0, title: MediaNames.quality($0)) }, selectedPart: selected.id, actualQuality: actual)
     }
 
     private func pixiv(_ link: MediaLink, cookie: String) async throws -> MediaResult {

@@ -2,10 +2,12 @@
 import SwiftUI
 
 @main
+@MainActor
 struct YunXApp: App {
     @StateObject private var downloads = DownloadStore()
     @StateObject private var vault = CredentialVault()
     @StateObject private var library = LinkLibrary()
+    @StateObject private var assemblies = MediaAssemblyStore()
     @AppStorage("appearance") private var appearance = "system"
 
     var body: some Scene {
@@ -29,12 +31,15 @@ struct YunXApp: App {
                     .tabItem { Label("GitHub", systemImage: "shippingbox") }
             }
             .environmentObject(library)
+            .environmentObject(assemblies)
             .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
         }
     }
 }
 
+@MainActor
 struct DownloadScreen: View {
+    @EnvironmentObject var assemblies: MediaAssemblyStore
     @ObservedObject var store: DownloadStore
     @State private var input = ""
     @State private var inputError: String?
@@ -65,6 +70,9 @@ struct DownloadScreen: View {
                 }
                 if let error = store.storageError {
                     Section("存储提示") { Text(error).foregroundStyle(.red) }
+                }
+                Section("音视频") {
+                    NavigationLink("合轨任务（\(assemblies.jobs.count)）") { AssemblyQueueScreen(store: assemblies) }
                 }
                 Section("原生引擎") {
                     NavigationLink("引擎任务（P2P / HLS）") { P2PScreen() }

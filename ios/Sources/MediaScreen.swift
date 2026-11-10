@@ -10,12 +10,12 @@ final class MediaScreenModel: ObservableObject {
     @Published var notice: String?
     @Published private(set) var busy = false
 
-    func resolve(_ link: MediaLink, cookie: String, part: Int? = nil, quality: Int? = nil) async {
+    func resolve(_ link: MediaLink, cookie: String, part: Int? = nil, quality: Int? = nil, preferDASH: Bool = false) async {
         guard !busy else { return }
         busy = true; failure = nil; notice = nil
         defer { busy = false }
         do {
-            let resolved = try await MediaClient().resolve(link, cookie: cookie, part: part, quality: quality)
+            let resolved = try await MediaClient().resolve(link, cookie: cookie, part: part, quality: quality, preferDASH: preferDASH)
             try Task.checkCancellation()
             result = resolved
             notice = resolved.notice
@@ -25,7 +25,7 @@ final class MediaScreenModel: ObservableObject {
 
     func clear() { result = nil; failure = nil; notice = nil }
 
-    func download(_ assets: [MediaAsset], store: DownloadStore) {
+    func download(_ assets: [MediaAsset], store: DownloadStore, assemblies: MediaAssemblyStore) {
         guard !busy else { return }
         busy = true; failure = nil; notice = nil
         Task { @MainActor in
@@ -34,13 +34,16 @@ final class MediaScreenModel: ObservableObject {
             var hls = 0
             for asset in assets {
                 do {
-                    if asset.isHLS { try await NativeEngine.shared.createHLS(asset); hls += 1 }
+                    if asset.audioURL != nil {
+                        guard assemblies.add(asset) else { throw CloudError.message(assemblies.storageError ?? "无法创建合轨任务。") }
+                    } else if asset.isHLS { try await NativeEngine.shared.createHLS(asset); hls += 1 }
                     else if !store.add(asset.url, filename: asset.filename, headers: asset.headers, expectedSize: asset.size, expectedMedia: asset.kind == .image ? "image" : "video") {
                         throw CloudError.message(store.storageError ?? "创建下载任务失败。")
                     }
                     added += 1
                 } catch { failure = "创建媒体任务失败，请检查引擎、资源或网络。"; break }
             }
+            if assets.contains(where: { $0.audioURL != nil }) { notice = "已加入 \(added) 项，分轨任务请到「下载 → 合轨任务」查看。"; return }
             notice = hls > 0 ? "已加入 \(added) 项；HLS 任务请到「下载 → 引擎任务」查看。" : "已加入 \(added) 个文件，请到「下载」查看。"
         }
     }
@@ -50,10 +53,12 @@ final class MediaScreenModel: ObservableObject {
 @MainActor
 struct MediaScreen: View {
     @EnvironmentObject var library: LinkLibrary
+    @EnvironmentObject var assemblies: MediaAssemblyStore
     @ObservedObject var vault: CredentialVault
     @ObservedObject var downloads: DownloadStore
     @StateObject private var model = MediaScreenModel()
     @State private var provider: MediaProvider = .bilibili
+    @State private var preferDASH = true
     @State private var accountID: UUID?
     @State private var input = ""
     @State private var loadedLink: MediaLink?
@@ -72,6 +77,10 @@ struct MediaScreen: View {
                         ForEach(MediaProvider.allCases) { Text($0.rawValue).tag($0) }
                     }.disabled(model.busy)
                         .onChange(of: provider) { _, _ in accountID = accounts.first(where: { $0.isPrimary == true })?.id; model.clear(); loadedCookie = "" }
+                    if provider == .bilibili {
+                        Toggle("登录后优先 DASH 高清合轨", isOn: $preferDASH).disabled(model.busy)
+                            .onChange(of: preferDASH) { _, _ in model.clear() }
+                    }
                     Picker("账号", selection: $accountID) {
                         Text("游客").tag(Optional<UUID>.none)
                         ForEach(accounts) { Text($0.remark.isEmpty ? "已保存账号" : $0.remark).tag(Optional($0.id)) }
@@ -93,10 +102,10 @@ struct MediaScreen: View {
                                 return
                             }
                             model.clear()
-                            action = Task { await model.resolve(link, cookie: cookie) }
+                            action = Task { await model.resolve(link, cookie: cookie, preferDASH: preferDASH) }
                         } catch { model.failure = error.localizedDescription }
                     }.disabled(model.busy || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Text("B 站仅接入平台返回的单文件流；画质由账号权限决定。Pixiv 支持静态原图，动图暂未支持。")
+                    Text("B 站可下载单文件或适配的 DASH 音视频并合轨，画质由平台权限决定。Pixiv 当前支持静态原图。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if model.busy { Section { ProgressView("正在解析…") } }
@@ -133,12 +142,13 @@ struct MediaScreen: View {
                         ForEach(result.assets) { asset in
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(asset.filename).lineLimit(2)
+                                if asset.audioURL != nil { Text(asset.previewURL == nil ? "当前没有可用的单文件预览，请下载合轨后播放。" : "分轨下载后无损合轨；在线预览使用平台单文件流，画质可能不同。").font(.caption).foregroundStyle(.secondary) }
                                 if asset.isHLS { Text("HLS 可在线播放；下载由原生引擎合并为实际 TS/fMP4 容器。").font(.caption).foregroundStyle(.secondary) }
                                 HStack {
                                     Text(asset.label).font(.caption).foregroundStyle(.secondary)
                                     Spacer()
-                                    Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered)
-                                    Button("下载") { model.download([asset], store: downloads) }
+                                    Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered).disabled(asset.audioURL != nil && asset.previewURL == nil)
+                                    Button("下载") { model.download([asset], store: downloads, assemblies: assemblies) }
                                         .buttonStyle(.bordered).disabled(model.busy)
                                 }
                             }.padding(.vertical, 3)
@@ -156,7 +166,7 @@ struct MediaScreen: View {
             .sheet(item: $preview) { MediaPreviewScreen(asset: $0.asset) }
             .confirmationDialog("将这些文件加入前台下载任务？", isPresented: $confirmAll, titleVisibility: .visible) {
                 Button("加入全部下载") {
-                    if let result = model.result { model.download(result.assets, store: downloads) }
+                    if let result = model.result { model.download(result.assets, store: downloads, assemblies: assemblies) }
                 }
             }
             .onDisappear { action?.cancel() }
@@ -165,7 +175,7 @@ struct MediaScreen: View {
 
     private func reload(part: Int, quality: Int?) {
         guard let loadedLink else { return }
-        action = Task { await model.resolve(loadedLink, cookie: loadedCookie, part: part, quality: quality) }
+        action = Task { await model.resolve(loadedLink, cookie: loadedCookie, part: part, quality: quality, preferDASH: preferDASH) }
     }
 }
 
@@ -196,7 +206,7 @@ final class MoviePreviewState: ObservableObject {
                 item = AVPlayerItem(url: url)
             } catch { if generation == current { failure = "无法启动 HLS 播放，请重新解析或下载。" }; return }
         } else {
-            let loader = MovieResourceLoader(url: asset.url, headers: asset.headers)
+            let loader = MovieResourceLoader(url: asset.previewURL ?? asset.url, headers: asset.headers)
             self.loader = loader
             item = AVPlayerItem(asset: loader.asset())
         }

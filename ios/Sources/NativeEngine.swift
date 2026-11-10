@@ -9,6 +9,8 @@ struct EngineEnvelope<T: Decodable>: Decodable {
 struct EngineTask: Decodable, Identifiable {
     struct Progress: Decodable { let downloaded: Int64?; let speed: Int64? }
     struct Metadata: Decodable {
+        struct Request: Decodable { let labels: [String: String]? }
+        let req: Request?
         struct Options: Decodable { let path: String? }
         struct Resource: Decodable { let size: Int64? }
         let opts: Options?
@@ -88,6 +90,13 @@ actor NativeEngine {
         let request: [String: Any] = ["req": ["url": url, "extra": ["trackers": trackers]],
             "opts": ["path": folder.path, "skipAutoCategorize": true]]
         _ = try await invoke("POST", path: "/api/v1/tasks", body: JSONSerialization.data(withJSONObject: request))
+    }
+    @discardableResult
+    func createHTTPS(_ request: NativeHTTPSRequest) async throws -> String {
+        let folder = downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let data = try await invoke("POST", path: "/api/v1/tasks", body: request.body(folder: folder))
+        guard let id = try JSONDecoder().decode(EngineEnvelope<String>.self, from: data).data else { throw CloudError.message("引擎未返回任务 ID。") }
+        return id
     }
     func createHLS(_ asset: MediaAsset) async throws {
         guard asset.isHLS, asset.url.scheme == "https", asset.url.pathExtension.lowercased() == "m3u8",

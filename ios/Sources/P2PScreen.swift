@@ -41,7 +41,7 @@ final class P2PStore: ObservableObject {
     @Published var busy = false
     @Published var message: String?
     func refresh() async {
-        do { tasks = try await NativeEngine.shared.tasks() }
+        do { tasks = try await NativeEngine.shared.tasks().filter { $0.meta?.req?.labels?["yunxAssembly"] == nil } }
         catch { if !Task.isCancelled { message = "引擎任务读取失败，请重试。" } }
     }
     func add(_ raw: String, trackers: String) async {
@@ -52,6 +52,17 @@ final class P2PStore: ObservableObject {
             let link = try P2PInput.link(raw)
             try await NativeEngine.shared.create(link, trackers: P2PInput.trackers(trackers))
             message = "已加入 P2P 队列。"
+            await refresh()
+        } catch { message = error.localizedDescription }
+    }
+    func addHTTPS(_ text: String, filename: String, connections: Int, checksum: String) async {
+        guard !busy else { return }
+        busy = true; message = nil
+        defer { busy = false }
+        do {
+            let request = try NativeHTTPSRequest(text: text, filename: filename, connections: connections, checksum: checksum)
+            try await NativeEngine.shared.createHTTPS(request)
+            message = "已加入原生下载队列；若设置预期摘要，校验不匹配会标记失败。"
             await refresh()
         } catch { message = error.localizedDescription }
     }
@@ -89,6 +100,11 @@ final class P2PStore: ObservableObject {
 struct P2PScreen: View {
     @StateObject private var store = P2PStore()
     @State private var input = ""
+    @State private var https = ""
+    @State private var filename = ""
+    @State private var checksum = ""
+    @State private var confirmConnections = false
+    @AppStorage("engineHTTPConnections") private var httpConnections = 4
     @State private var importing = false
     @State private var deleting: EngineTask?
     @AppStorage("engineTrackers") private var trackers = ""
@@ -96,6 +112,18 @@ struct P2PScreen: View {
     @AppStorage("engineParallel") private var parallel = 3
     var body: some View {
         List {
+            Section("多连接 HTTPS 下载") {
+                TextField("https://… 文件直链", text: $https, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("文件名（可选）", text: $filename)
+                TextField("预期 SHA-256（可选）", text: $checksum, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Stepper("连接数：\(httpConnections)", value: $httpConnections, in: 1...512)
+                Button("加入原生下载") {
+                    if httpConnections > 32 { confirmConnections = true }
+                    else { Task { await store.addHTTPS(https, filename: filename, connections: httpConnections, checksum: checksum) } }
+                }.disabled(store.busy || https.isEmpty)
+                Text("支持 Range 的服务器可分片并发；不支持时由引擎回退顺序下载。此入口不接收账号请求头。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             Section("P2P 下载") {
                 TextField("magnet:?xt=… / ed2k://…", text: $input, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("加入下载") { Task { await store.add(input, trackers: trackers) } }.disabled(store.busy || input.isEmpty)
@@ -150,6 +178,9 @@ struct P2PScreen: View {
                     await store.refresh()
                     do { try await Task.sleep(for: .seconds(2)) } catch { break }
                 }
+            }
+            .confirmationDialog("连接数超过 32，可能增加设备资源占用或触发服务器限制。", isPresented: $confirmConnections, titleVisibility: .visible) {
+                Button("按所选连接数创建") { Task { await store.addHTTPS(https, filename: filename, connections: httpConnections, checksum: checksum) } }
             }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
                 if case .success(let url) = result { Task { await store.importTorrent(url, trackers: trackers) } }

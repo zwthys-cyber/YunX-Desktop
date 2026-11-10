@@ -144,6 +144,7 @@ struct MediaAsset: Identifiable {
     let kind: Kind
     let headers: [String: String]
     var isHLS = false
+    var audioURL: URL? = nil
 }
 struct MediaResult {
     let title: String
