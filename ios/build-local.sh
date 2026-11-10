@@ -41,6 +41,10 @@ ipa="$PWD/build/YunX-iOS17-TrollStore-dev.ipa"
 rm -f -- "$ipa"
 (cd "$build_dir/package" && /usr/bin/zip -qry "$ipa" Payload)
 /usr/bin/unzip -tq "$ipa"
-shasum -a 256 "$ipa" > "$ipa.sha256"
+(
+  cd build
+  shasum -a 256 YunX-iOS17-TrollStore-dev.ipa > YunX-iOS17-TrollStore-dev.ipa.sha256
+)
+cat "$ipa.sha256"
 echo "开发版 IPA：$ipa"
 echo "编译和打包通过不代表已完成真机安装或全部功能移植。"
