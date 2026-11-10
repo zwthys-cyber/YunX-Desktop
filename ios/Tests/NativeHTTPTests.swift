@@ -63,11 +63,11 @@ private final class NativeHTTPFixture {
             var head = "HTTP/1.1 \(partial ? 206 : 200) OK\r\nAccept-Ranges: bytes\r\nETag: \"yunx-test-fixture\"\r\nContent-Type: application/octet-stream\r\nContent-Length: \(end - start + 1)\r\nConnection: close\r\n"
             if partial { head += "Content-Range: bytes \(start)-\(end)/\(self.data.count)\r\n" }
             let body = text.hasPrefix("HEAD ") ? Data() : self.data.subdata(in: start..<(end + 1))
-            connection.send(content: Data((head + "\r\n").utf8), completion: .contentProcessed { error in
+            connection.send(content: Data((head + "\r\n").utf8), contentContext: body.isEmpty ? .finalMessage : .defaultMessage, isComplete: body.isEmpty, completion: .contentProcessed { error in
                 guard error == nil else { connection.cancel(); return }
-                if body.isEmpty { connection.cancel() }
+                if body.isEmpty { return }
                 else if start == 0 { self.stream(body, offset: 0, connection: connection) }
-                else { connection.send(content: body, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in connection.cancel() }) }
+                else { connection.send(content: body, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in if error != nil { connection.cancel() } }) }
             })
         }
     }
@@ -77,8 +77,7 @@ private final class NativeHTTPFixture {
         connection.send(content: body.subdata(in: offset..<end), contentContext: last ? .finalMessage : .defaultMessage,
                         isComplete: last, completion: .contentProcessed { [weak self] error in
             guard error == nil, let self else { connection.cancel(); return }
-            if last { connection.cancel() }
-            else { self.queue.asyncAfter(deadline: .now() + .milliseconds(5)) { self.stream(body, offset: end, connection: connection) } }
+            if !last { self.queue.asyncAfter(deadline: .now() + .milliseconds(5)) { self.stream(body, offset: end, connection: connection) } }
         })
     }
     func stop() { queue.sync { listener.cancel(); clients.forEach { $0.cancel() }; clients.removeAll() } }
@@ -118,7 +117,12 @@ final class NativeHTTPTests: XCTestCase {
                 }
                 let task = try XCTUnwrap(terminal, "Native fixture download timed out")
                 if expected == digest {
-                    XCTAssertEqual(task.status, "done")
+                    if task.status != "done" {
+                        // Test sandbox contains synthetic fixtures only, never real account requests.
+                        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                        let log = (try? Data(contentsOf: support.appendingPathComponent("YunX/Engine/logs/core.log"))) ?? Data()
+                        XCTFail("Native fixture failed: " + String(decoding: log.suffix(16_384), as: UTF8.self))
+                    }
                     let file = try XCTUnwrap(NativeEngine.shared.completedFiles(task).first)
                     XCTAssertEqual(try Data(contentsOf: file), content)
                     XCTAssertTrue(fixture.usedNonzeroRange)

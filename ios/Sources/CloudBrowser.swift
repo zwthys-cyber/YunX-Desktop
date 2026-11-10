@@ -70,7 +70,7 @@ struct CloudHomeScreen: View {
                 }
                 if let error { Section("提示") { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Text("当前接入夸克、UC 和 123 的目录与单文件取链。支持当前文件夹递归批量下载（最多 500 文件/100 目录）；转存管理及其他平台仍在移植。")
+                    Text("当前接入夸克、UC、123 和光鸭的目录与单文件取链。支持当前文件夹递归批量下载（最多 500 文件/100 目录）；转存管理及其他平台仍在移植。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
@@ -99,7 +99,11 @@ final class CloudBrowserModel: ObservableObject {
     init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore) {
         share = route.share
         self.downloads = downloads
-        client = CloudClient(provider: route.provider, cookie: route.account?.secret ?? "",
+        client = CloudClient(provider: route.provider, cookie: route.account?.secret ?? "", fields: route.account?.backupFields ?? [:],
+                             credentialChanged: { [weak vault] token, fields in
+            guard let id = route.account?.id else { return false }
+            return vault?.updateCredential(id, secret: token, fields: fields) == true
+        },
                              cookieChanged: { [weak vault] new in
             if let id = route.account?.id { vault?.updateSecret(id, secret: new) }
         })

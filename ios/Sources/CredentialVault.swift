@@ -40,11 +40,11 @@ final class CredentialVault: ObservableObject {
          kSecAttrAccount as String: account]
     }
 
-    func add(platform: String, remark: String, secret: String) {
+    func add(platform: String, remark: String, secret: String, fields: [String: String]? = nil) {
         let value = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         var updated = accounts
-        updated.append(SavedCredential(platform: platform, remark: remark, secret: value))
+        updated.append(SavedCredential(platform: platform, remark: remark, secret: value, backupFields: fields))
         persist(updated)
     }
 
@@ -53,6 +53,18 @@ final class CredentialVault: ObservableObject {
         var updated = accounts
         updated[index].secret = secret
         persist(updated)
+    }
+
+    @discardableResult
+    func updateCredential(_ id: UUID, secret: String, fields: [String: String]) -> Bool {
+        guard let index = accounts.firstIndex(where: { $0.id == id }) else { return false }
+        var updated = accounts
+        updated[index].secret = secret
+        var merged = updated[index].backupFields ?? [:]
+        merged.merge(fields) { _, value in value }
+        updated[index].backupFields = merged
+        persist(updated)
+        return message == nil
     }
 
     func setPrimary(_ id: UUID) {

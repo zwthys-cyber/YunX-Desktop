@@ -71,9 +71,11 @@ final class MediaAssemblyStore: ObservableObject {
         jobs[i].state = actions[id] == nil ? .paused : .pausing; save()
     }
     func delete(_ id: UUID) {
-        actions[id]?.cancel()
+        let previous = jobs
         let tracks = jobs.first(where: { $0.id == id })?.trackIDs ?? []
-        jobs.removeAll { $0.id == id }; save()
+        jobs.removeAll { $0.id == id }
+        guard save() else { jobs = previous; return }
+        actions[id]?.cancel()
         Task { for track in tracks { _ = try? await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/" + track, query: "force=false") } }
     }
     func output(_ job: AssemblyJob) -> URL? {
@@ -96,7 +98,12 @@ final class MediaAssemblyStore: ObservableObject {
                         _ = try? await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/" + track, query: "force=false")
                         throw CancellationError()
                     }
-                    jobs[i].trackIDs.append(track); save()
+                    jobs[i].trackIDs.append(track)
+                    guard save() else {
+                        jobs[i].trackIDs.removeLast()
+                        _ = try? await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/" + track, query: "force=false")
+                        throw CloudError.message("合轨任务记录保存失败，已停止新建下载。")
+                    }
                 }
             }
             try Task.checkCancellation()

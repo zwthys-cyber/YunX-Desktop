@@ -137,6 +137,7 @@ struct AccountScreen: View {
     @State private var loginProvider: CloudProvider?
     @State private var mediaLoginProvider: MediaProvider?
     @State private var pan123Login = false
+    @State private var guangyaLogin = false
     @State private var editingCredential: SavedCredential?
     @State private var verifyingID: UUID?
     @State private var verification: String?
@@ -150,7 +151,8 @@ struct AccountScreen: View {
             Form {
                 Section("登录") {
                     Button("123 账号密码登录") { pan123Login = true }
-                    ForEach(CloudProvider.allCases.filter { $0 != .pan123 }) { provider in
+                    Button("光鸭账号密码登录") { guangyaLogin = true }
+                    ForEach(CloudProvider.allCases.filter(\.supportsWebCookieLogin)) { provider in
                         Button("登录" + provider.rawValue) { loginProvider = provider }
                     }
                     ForEach(MediaProvider.allCases.filter { $0.supportsAccountValidation }) { provider in
@@ -201,6 +203,7 @@ struct AccountScreen: View {
             }.navigationTitle("账号")
                 .sheet(item: $editingCredential) { CredentialEditScreen(account: $0, vault: vault) }
                 .sheet(isPresented: $pan123Login) { Pan123LoginScreen(vault: vault) }
+                .sheet(isPresented: $guangyaLogin) { GuangYaLoginScreen(vault: vault) }
                 .sheet(item: $loginProvider) { provider in
                     CloudWebLogin(provider: provider, vault: vault)
                 }
@@ -218,7 +221,8 @@ struct AccountScreen: View {
             do {
                 let name: String
                 if let provider = CloudProvider(rawValue: account.platform) {
-                    let client = CloudClient(provider: provider, cookie: account.secret,
+                    let client = CloudClient(provider: provider, cookie: account.secret, fields: account.backupFields ?? [:],
+                                             credentialChanged: { vault.updateCredential(account.id, secret: $0, fields: $1) },
                                              cookieChanged: { vault.updateSecret(account.id, secret: $0) })
                     name = try await client.validateAccount()
                 } else if let provider = MediaProvider(rawValue: account.platform) {
