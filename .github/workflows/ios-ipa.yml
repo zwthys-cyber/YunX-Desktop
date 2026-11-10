@@ -7,6 +7,12 @@ on:
       - 'ios/**'
       - '.github/workflows/ios-ipa.yml'
   workflow_dispatch:
+    inputs:
+      macos_runner:
+        description: GitHub standard macOS runner
+        type: choice
+        default: macos-15-intel
+        options: [macos-15-intel, macos-15]
 
 permissions:
   contents: read
@@ -18,7 +24,7 @@ concurrency:
 jobs:
   build:
     name: Build arm64 IPA for iOS 17
-    runs-on: macos-15
+    runs-on: ${{ inputs.macos_runner || 'macos-15-intel' }}
     timeout-minutes: 90
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
@@ -52,7 +58,9 @@ jobs:
       - name: Identify engine toolchain
         id: engine-toolchain
         shell: bash
-        run: echo "key=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        run: |
+          yunx_toolchain_key="$({ xcodebuild -version; go version; xcrun --sdk iphoneos --show-sdk-version; xcrun --sdk iphonesimulator --show-sdk-version; } | shasum -a 256 | cut -d ' ' -f 1)"
+          echo "key=$yunx_toolchain_key" >> "$GITHUB_OUTPUT"
 
       - name: Restore Go dependency and compiler cache
         id: go-engine-cache

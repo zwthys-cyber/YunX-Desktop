@@ -7,7 +7,7 @@ final class DownloadStorageTests: XCTestCase {
         let (root, documents) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: documents.appendingPathComponent("Selected"), withIntermediateDirectories: false)
-        XCTAssertEqual(try DownloadStorage.localParent("documents/Selected", documents: documents), documents.appendingPathComponent("Selected").resolvingSymlinksInPath())
+        XCTAssertEqual(try DownloadStorage.localParent("documents/Selected", documents: documents).path, documents.appendingPathComponent("Selected").resolvingSymlinksInPath().path)
         for path in ["documents/../outside", "documents//child", "/documents/child", "other/child"] {
             XCTAssertThrowsError(try DownloadStorage.localParent(path, documents: documents))
         }

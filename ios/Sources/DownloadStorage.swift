@@ -97,7 +97,7 @@ enum DownloadStorage {
               parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }), value.utf8.count <= 4096 else { throw DownloadStorageError.unavailable }
         let root = documents.resolvingSymlinksInPath().standardizedFileURL
         let parent = parts.dropFirst().reduce(root) { $0.appendingPathComponent(String($1), isDirectory: true) }.resolvingSymlinksInPath().standardizedFileURL
-        guard parent == root || parent.path.hasPrefix(root.path + "/") else { throw DownloadStorageError.unavailable }
+        guard parent.path == root.path || parent.path.hasPrefix(root.path + "/") else { throw DownloadStorageError.unavailable }
         return parent
     }
     /// Called only after all transport engines and assembly writers have stopped.
@@ -108,11 +108,11 @@ enum DownloadStorage {
         let parent = parent ?? documents
         let canonical = parent.resolvingSymlinksInPath().standardizedFileURL
         let canonicalDocuments = documents.resolvingSymlinksInPath().standardizedFileURL
-        let isLocal = canonical == canonicalDocuments || canonical.path.hasPrefix(canonicalDocuments.path + "/")
+        let isLocal = canonical.path == canonicalDocuments.path || canonical.path.hasPrefix(canonicalDocuments.path + "/")
         guard isLocal || accessed else { throw DownloadStorageError.unavailable }
         for name in names {
             let source = documents.appendingPathComponent(name).resolvingSymlinksInPath().standardizedFileURL
-            guard canonical != source, !canonical.path.hasPrefix(source.path + "/") else { throw DownloadStorageError.occupied }
+            guard canonical.path != source.path, !canonical.path.hasPrefix(source.path + "/") else { throw DownloadStorageError.occupied }
         }
         let transaction = UUID()
         let folder = "YunX-" + transaction.uuidString
@@ -194,7 +194,7 @@ enum DownloadStorage {
         let canonicalTarget = target.resolvingSymlinksInPath().standardizedFileURL
         for name in names {
             let source = documents.appendingPathComponent(name).resolvingSymlinksInPath().standardizedFileURL
-            guard canonicalTarget != source, !canonicalTarget.path.hasPrefix(source.path + "/") else { throw DownloadStorageError.occupied }
+            guard canonicalTarget.path != source.path, !canonicalTarget.path.hasPrefix(source.path + "/") else { throw DownloadStorageError.occupied }
         }
         let marker = try Data(contentsOf: target.appendingPathComponent(".yunx-verified"))
         guard marker == Data("yunx-download-storage-v1".utf8) else { throw DownloadStorageError.changed }

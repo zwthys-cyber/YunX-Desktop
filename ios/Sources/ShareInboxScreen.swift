@@ -60,6 +60,9 @@ struct ShareInboxScreen: View {
                     Text(item.created, style: .date).font(.caption).foregroundStyle(.secondary)
                     HStack {
                         if destination.kind != .unknown { Button(destination.title) { route(destination, item: item) }.buttonStyle(.bordered) }
+                        else if CloudCommandClient.candidate(item.text) {
+                            Button("作为网盘口令填入") { route(InboxDestination(kind: .cloud, text: item.text), item: item) }.buttonStyle(.bordered)
+                        }
                         ShareLink(item: item.text) { Text("分享文字") }.buttonStyle(.bordered)
                     }
                 }.swipeActions { Button("删除", role: .destructive) { model.remove(item) } }
