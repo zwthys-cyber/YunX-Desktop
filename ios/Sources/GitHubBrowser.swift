@@ -23,6 +23,12 @@ struct GitHubRepository: Equatable {
     }
     var apiPath: String { "/repos/\(owner)/\(name)" }
 }
+struct GitHubRepositorySummary: Decodable, Identifiable {
+    let id: Int64
+    let full_name: String
+    let description: String?
+    let stargazers_count: Int
+}
 struct GitHubEntry: Decodable, Identifiable {
     let name: String
     let path: String
@@ -83,6 +89,21 @@ final class GitHubClient {
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw CloudError.message("GitHub 数据格式无法识别。") }
     }
+    func validateAccount() async throws -> String {
+        guard !token.isEmpty else { throw CloudError.message("请先保存 GitHub Token。") }
+        struct Profile: Decodable { let login: String }
+        let profile: Profile = try await get("/user")
+        guard !profile.login.isEmpty else { throw CloudError.message("GitHub 账号信息为空。") }
+        return profile.login
+    }
+    func repositories(owner: String, organization: Bool, page: Int) async throws -> [GitHubRepositorySummary] {
+        // Reuse repository input validation so owner cannot inject API path segments.
+        let parsed = try GitHubRepository.parse(owner + "/repository")
+        return try await get("/" + (organization ? "orgs" : "users") + "/" + parsed.owner + "/repos", query: [
+            URLQueryItem(name: "sort", value: "updated"), URLQueryItem(name: "per_page", value: "30"),
+            URLQueryItem(name: "page", value: String(page))
+        ])
+    }
     func contents(_ repo: GitHubRepository, path: String = "") async throws -> [GitHubEntry] {
         let entries: [GitHubEntry] = try await get(repo.apiPath + "/contents/" + path)
         return entries.sorted { a, b in
@@ -107,6 +128,8 @@ struct GitHubScreen: View {
     @ObservedObject var downloads: DownloadStore
     @State private var input = "zwthys-cyber/YunX-Desktop"
     @State private var accountID: UUID?
+    @State private var owner = ""
+    @State private var organization = false
     @State private var repo: GitHubRepository?
     @State private var message: String?
     var body: some View {
@@ -130,6 +153,14 @@ struct GitHubScreen: View {
                         catch { message = error.localizedDescription }
                     }
                     if let message { Text(message).foregroundStyle(.red) }
+                }
+                Section("用户与组织") {
+                    TextField("GitHub 用户名或组织名", text: $owner).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Toggle("组织账号", isOn: $organization)
+                    NavigationLink("浏览仓库列表") {
+                        GitHubOwnerScreen(owner: owner.trimmingCharacters(in: .whitespacesAndNewlines), organization: organization,
+                            client: GitHubClient(token: vault.accounts.first { $0.id == accountID && $0.platform == "GitHub" }?.secret ?? ""), downloads: downloads)
+                    }.disabled(owner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Section {
                     Text("在账号页保存 GitHub Token 可提高 API 限额或浏览授权仓库。当前下载仅支持公开文件，私有文件不会携带 Token 下载。目录最多显示 1000 项。")
@@ -256,5 +287,49 @@ private final class GitHubRedirectPolicy: NSObject, URLSessionTaskDelegate {
                     newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
+    }
+}
+
+struct GitHubOwnerScreen: View {
+    let owner: String
+    let organization: Bool
+    let client: GitHubClient
+    @ObservedObject var downloads: DownloadStore
+    @State private var repositories: [GitHubRepositorySummary] = []
+    @State private var page = 1
+    @State private var more = true
+    @State private var loading = false
+    @State private var message: String?
+    var body: some View {
+        List {
+            if let message { Text(message).foregroundStyle(.red) }
+            ForEach(repositories) { item in
+                if let repo = try? GitHubRepository.parse(item.full_name) {
+                    NavigationLink {
+                        GitHubRepositoryScreen(repo: repo, client: client, downloads: downloads)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.full_name)
+                            if let description = item.description { Text(description).font(.caption).foregroundStyle(.secondary) }
+                            Label(String(item.stargazers_count), systemImage: "star").font(.caption)
+                        }
+                    }
+                }
+            }
+            if loading { ProgressView() }
+            if more { Button("加载更多") { Task { await load() } }.disabled(loading) }
+            if !loading && !more && repositories.isEmpty { Text("暂无可访问的仓库") }
+        }.navigationTitle(owner).task { if repositories.isEmpty { await load() } }
+    }
+    @MainActor private func load() async {
+        guard !loading else { return }
+        loading = true; message = nil
+        defer { loading = false }
+        do {
+            let next = try await client.repositories(owner: owner, organization: organization, page: page)
+            let known = Set(repositories.map(\.id))
+            repositories.append(contentsOf: next.filter { !known.contains($0.id) })
+            page += 1; more = next.count == 30
+        } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
 }

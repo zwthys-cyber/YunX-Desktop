@@ -86,6 +86,9 @@ struct DownloadScreen: View {
                             if item.expected > 0 {
                                 ProgressView(value: min(Double(item.received) / Double(item.expected), 1))
                             }
+                            if let digest = item.sha256 {
+                                Text("SHA-256: " + digest).font(.caption.monospaced()).textSelection(.enabled)
+                            }
                             if let error = item.error { Text(error).font(.caption).foregroundStyle(.red) }
                             HStack {
                                 if item.state == .downloading || item.state == .waiting {
@@ -94,6 +97,8 @@ struct DownloadScreen: View {
                                     Button("继续") { store.start(item.id) }.buttonStyle(.bordered)
                                 }
                                 if let file = store.fileURL(item) {
+                                    Button(store.hashing.contains(item.id) ? "计算中…" : "SHA-256") { store.calculateChecksum(item.id) }
+                                        .buttonStyle(.bordered).disabled(store.hashing.contains(item.id))
                                     ShareLink(item: file) { Label("导出", systemImage: "square.and.arrow.up") }
                                         .buttonStyle(.bordered)
                                 }
@@ -165,7 +170,7 @@ struct AccountScreen: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if CloudProvider(rawValue: account.platform) != nil || MediaProvider(rawValue: account.platform) != nil {
+                            if CloudProvider(rawValue: account.platform) != nil || MediaProvider(rawValue: account.platform) != nil || account.platform == "GitHub" {
                                 Button(verifyingID == account.id ? "验证中" : "验证") { verify(account) }
                                     .disabled(verifyingID != nil).buttonStyle(.bordered)
                             }
@@ -196,6 +201,8 @@ struct AccountScreen: View {
                     name = try await client.validateAccount()
                 } else if let provider = MediaProvider(rawValue: account.platform) {
                     name = try await MediaClient().validate(provider: provider, cookie: account.secret)
+                } else if account.platform == "GitHub" {
+                    name = try await GitHubClient(token: account.secret).validateAccount()
                 } else { return }
                 verification = "\(account.platform)账号有效：\(name)"
             } catch { verification = "账号验证失败，请检查登录状态与网络。" }
@@ -226,9 +233,9 @@ struct PortStatusScreen: View {
                 }
                 Section("尚未移植") {
                     ForEach([
-                        "其他网盘适配、文件夹批量与转存管理",
+                        "其他网盘适配与转存管理",
                         "其余视频平台、B 站 DASH 合轨及 Pixiv 动图",
-                        "GitHub 用户仓库列表、Markdown 渲染、镜像和测速",
+                        "GitHub 完整 Markdown 渲染、镜像和测速",
                         "多线程分片、校验、限速与多源下载",
                         "HLS、DASH 合轨与 Live Photo",
                         "BT、磁力、ed2k 与 Gopeed 引擎",

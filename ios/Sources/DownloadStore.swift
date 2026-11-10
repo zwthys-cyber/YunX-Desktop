@@ -27,6 +27,7 @@ struct DownloadItem: Codable, Identifiable {
     var requiresHeaders: Bool?
     var preserveFilename: Bool?
     var requiredSize: Int64?
+    var sha256: String?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -34,6 +35,7 @@ struct DownloadItem: Codable, Identifiable {
 final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published private(set) var items: [DownloadItem] = []
     @Published var storageError: String?
+    @Published private(set) var hashing = Set<UUID>()
     @Published var maximumConcurrent = max(1, min(6, UserDefaults.standard.integer(forKey: "downloadConcurrency") == 0 ? 3 : UserDefaults.standard.integer(forKey: "downloadConcurrency"))) {
         didSet {
             UserDefaults.standard.set(maximumConcurrent, forKey: "downloadConcurrency")
@@ -195,6 +197,20 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard item.state == .completed else { return nil }
         let url = root.appendingPathComponent(item.filename)
         return manager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    func calculateChecksum(_ id: UUID) {
+        guard !hashing.contains(id), let item = items.first(where: { $0.id == id }), let file = fileURL(item) else { return }
+        hashing.insert(id)
+        Task { @MainActor [weak self] in
+            defer { self?.hashing.remove(id) }
+            do {
+                let digest = try await Task.detached(priority: .utility) { try FileDigest.sha256(file) }.value
+                guard let self, let index = self.items.firstIndex(where: { $0.id == id && $0.state == .completed }) else { return }
+                self.items[index].sha256 = digest
+                self.save()
+            } catch { self?.storageError = "无法计算文件 SHA-256，请确认文件存在且未被修改。" }
+        }
     }
 
     private func resumeURL(_ id: UUID) -> URL {

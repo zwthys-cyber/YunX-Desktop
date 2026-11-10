@@ -47,6 +47,24 @@ final class GitHubTests: XCTestCase {
         let releases = try await client.releases(repo, page: 2)
         XCTAssertEqual(releases.first?.tag_name, "v2")
     }
+    func testOrganizationPaginationUsesFixedAPIHost() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MediaMockProtocol.self]
+        MediaMockProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "api.github.com")
+            XCTAssertEqual(request.url?.path, "/orgs/example/repos")
+            XCTAssertTrue(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.contains(URLQueryItem(name: "page", value: "3")))
+            return (200, [:], [["id": 1, "full_name": "example/repo", "stargazers_count": 3]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = GitHubClient(session: URLSession(configuration: config))
+        let items = try await client.repositories(owner: "example", organization: true, page: 3)
+        XCTAssertEqual(items.first?.full_name, "example/repo")
+        do {
+            _ = try await client.repositories(owner: "../malicious", organization: false, page: 1)
+            XCTFail("Expected owner rejection")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("仓库")) }
+    }
     func testErrorDoesNotExposeServerTextOrToken() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MediaMockProtocol.self]

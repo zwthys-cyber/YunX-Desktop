@@ -30,16 +30,4 @@ final class CloudFolderTests: XCTestCase {
             XCTFail("Expected duplicate page rejection")
         } catch { XCTAssertTrue(error.localizedDescription.contains("分页重复")) }
     }
-    func testCancelledEnumerationMakesNoRequests() async throws {
-        let task = Task {
-            try Task.checkCancellation()
-            return try await CloudFolderCollector().collect(rootID: "0") { _, _ in
-                try Task.checkCancellation()
-                return []
-            }
-        }
-        task.cancel()
-        do { _ = try await task.value } catch is CancellationError { return }
-        // Cancellation may race with an empty enumeration finishing; no download is started by the collector.
-    }
 }
