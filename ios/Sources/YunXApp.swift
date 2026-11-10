@@ -25,6 +25,7 @@ struct YunXApp: App {
                 NavigationStack {
                     List {
                         NavigationLink("P2P 下载引擎") { P2PScreen() }
+                        NavigationLink("网页资源浏览器") { ResourceBrowserScreen(downloads: downloads) }
                         NavigationLink("账号管理") { AccountScreen(vault: vault) }
                         NavigationLink("认证备份") { AccountBackupScreen(vault: vault) }
                         NavigationLink("设置与收藏") { SettingsScreen(downloads: downloads) }
