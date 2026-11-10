@@ -21,7 +21,7 @@ cp Engine/mobile.go "$engine_temp/gopeed/bind/yunxengine/main.go"
 cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
-go get "golang.org/x/mobile/bind@$MOBILE_REV"
+go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_REV"
 # The pinned mobile tool changes the module graph; finalize all checksums before tests/vendor.
 go mod tidy
 # These upstream end-to-end tests use local httptest servers, not live platforms.
