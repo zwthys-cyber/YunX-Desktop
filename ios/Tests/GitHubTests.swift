@@ -124,3 +124,76 @@ extension GitHubTests {
         }
     }
 }
+
+extension GitHubTests {
+    func testTreeLinkConfirmsSlashBranchAndKeepsRefForDirectoryAndReadme() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MediaMockProtocol.self]
+        MediaMockProtocol.handler = { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            if request.url?.path.hasSuffix("/commits") == true {
+                let sha = query.first { $0.name == "sha" }?.value
+                if sha == "feature/new" { return (200, [:], [["sha": "test-commit"]]) }
+                return (404, [:], [:])
+            }
+            XCTAssertEqual(query.first { $0.name == "ref" }?.value, "feature/new")
+            if request.url?.path.hasSuffix("/readme") == true { return (200, [:], ["encoding": "base64", "content": Data("branch readme".utf8).base64EncodedString()]) }
+            XCTAssertEqual(request.url?.path, "/repos/owner/repo/contents/src/中文")
+            return (200, [:], [])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = GitHubClient(session: URLSession(configuration: config))
+        let input = try GitHubInput.parse("https://github.com/owner/repo/tree/feature/new/src/中文?unneeded=value")
+        let repo = try await client.resolve(input)
+        XCTAssertEqual(repo.ref, "feature/new")
+        XCTAssertEqual(repo.initialPath, "src/中文")
+        XCTAssertFalse(repo.initialFile)
+        XCTAssertFalse(repo.historyText.contains("unneeded"))
+        let files = try await client.contents(repo, path: repo.initialPath)
+        XCTAssertTrue(files.isEmpty)
+        let readme = try await client.readme(repo)
+        XCTAssertEqual(readme, "branch readme")
+    }
+    func testBlobLinkAndAuthorizationErrorsNeverFallBackToDefaultBranch() async throws {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MediaMockProtocol.self]
+        MediaMockProtocol.handler = { request in
+            let sha = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems?.first { $0.name == "sha" }?.value
+            if sha == "main" { return (200, [:], [["sha": "test-commit"]]) }
+            return (404, [:], [:])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = GitHubClient(session: URLSession(configuration: config))
+        let input = try GitHubInput.parse("https://github.com/owner/repo/blob/main/docs/file.txt")
+        let repo = try await client.resolve(input)
+        XCTAssertTrue(repo.initialFile); XCTAssertEqual(repo.initialPath, "docs/file.txt")
+        MediaMockProtocol.handler = { _ in (403, [:], ["message": "test-token must not appear"]) }
+        do { _ = try await client.resolve(input); XCTFail("Permission failure must stop ref resolution") }
+        catch let error as GitHubAPIError { XCTAssertEqual(error.status, 403); XCTAssertFalse(error.localizedDescription.contains("test-token")) }
+        catch { XCTFail("Unexpected error type") }
+        XCTAssertThrowsError(try GitHubInput.parse("https://github.com.evil.test/owner/repo/tree/main"))
+    }
+    func testPrivateFileAndReleasePlansSendTokenOnlyToOfficialAPI() async throws {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MediaMockProtocol.self]
+        MediaMockProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "api.github.com")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/vnd.github.object+json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+            return (200, [:], ["name": "file.txt", "path": "docs/file.txt", "type": "file", "size": 3, "download_url": NSNull()])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = GitHubClient(token: "test-token", session: URLSession(configuration: config))
+        var repo = GitHubRepository(owner: "owner", name: "repo"); repo.ref = "feature/new"
+        let plan = try await client.fileDownload(repo, path: "docs/file.txt")
+        XCTAssertEqual(plan.url.host, "api.github.com")
+        XCTAssertEqual(plan.headers["Accept"], "application/vnd.github.raw+json")
+        XCTAssertEqual(URLComponents(url: plan.url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "feature/new")
+        let target = URL(string: "https://release-assets.githubusercontent.com/file")!
+        XCTAssertNil(DownloadHeaders.redirectHeaders(plan.headers, original: plan.url, target: target)["Authorization"])
+        let asset = GitHubRelease.Asset(id: 42, name: "asset.bin", size: 3, browser_download_url: URL(string: "https://github.com/owner/repo/releases/download/v1/asset.bin")!)
+        let release = try client.releaseDownload(repo, asset: asset)
+        XCTAssertEqual(release.url.path, "/repos/owner/repo/releases/assets/42")
+        XCTAssertEqual(release.headers["Accept"], "application/octet-stream")
+        XCTAssertEqual(release.headers["Authorization"], "Bearer test-token")
+        XCTAssertNil(DownloadHeaders.redirectHeaders(release.headers, original: release.url, target: target)["Authorization"])
+    }
+}

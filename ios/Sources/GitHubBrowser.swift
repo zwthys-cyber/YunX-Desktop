@@ -6,6 +6,10 @@ import WebKit
 struct GitHubRepository: Equatable {
     let owner: String
     let name: String
+    var ref: String? = nil
+    var initialPath = ""
+    var initialFile = false
+    var refQuery: [URLQueryItem] { ref.map { [URLQueryItem(name: "ref", value: $0)] } ?? [] }
     static func parse(_ input: String) throws -> Self {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let pieces: [String]
@@ -23,6 +27,39 @@ struct GitHubRepository: Equatable {
         return Self(owner: pieces[0], name: name)
     }
     var apiPath: String { "/repos/\(owner)/\(name)" }
+    var historyText: String {
+        guard let ref else { return owner + "/" + name }
+        var parts = URLComponents(); parts.scheme = "https"; parts.host = "github.com"
+        parts.path = "/" + owner + "/" + name + (initialFile ? "/blob/" : "/tree/") + ref + (initialPath.isEmpty ? "" : "/" + initialPath)
+        return parts.url?.absoluteString ?? (owner + "/" + name)
+    }
+}
+
+struct GitHubInput {
+    let repository: GitHubRepository
+    let components: [String]
+    let file: Bool
+    static func parse(_ text: String) throws -> Self {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let root = try? GitHubRepository.parse(text) { return Self(repository: root, components: [], file: false) }
+        guard let url = URL(string: text), url.scheme?.lowercased() == "https", url.host?.lowercased() == "github.com", url.user == nil, url.password == nil else { throw CloudError.message("请输入 GitHub 仓库、tree 目录或 blob 文件链接。") }
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard parts.count >= 4, ["tree", "blob"].contains(parts[2]), parts.count <= 20,
+              parts.allSatisfy({ $0 != "." && $0 != ".." && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }) else { throw CloudError.message("GitHub 子路径链接无效或过长。") }
+        return Self(repository: try GitHubRepository.parse(parts[0] + "/" + parts[1]), components: Array(parts.dropFirst(3)), file: parts[2] == "blob")
+    }
+}
+
+struct GitHubAPIError: LocalizedError {
+    let status: Int
+    var errorDescription: String? {
+        switch status {
+        case 401: return "GitHub Token 无效，请重新保存。"
+        case 403, 429: return "GitHub 请求受限，请稍后重试或检查 Token 权限。"
+        case 404: return "内容不存在或当前账号无访问权限。"
+        default: return "GitHub 请求失败（HTTP \(status)）。"
+        }
+    }
 }
 struct GitHubRepositorySummary: Decodable, Identifiable {
     let id: Int64
@@ -65,13 +102,13 @@ final class GitHubClient {
         }
     }
     deinit { session.invalidateAndCancel() }
-    private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
+    private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], accept: String = "application/vnd.github+json") async throws -> T {
         var parts = URLComponents()
         parts.scheme = "https"; parts.host = "api.github.com"; parts.path = path
         parts.queryItems = query.isEmpty ? nil : query
         guard let url = parts.url else { throw CloudError.message("GitHub 请求地址无效。") }
         var request = URLRequest(url: url)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue("YunX-iOS", forHTTPHeaderField: "User-Agent")
         if !token.isEmpty { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         let data: Data
@@ -80,12 +117,7 @@ final class GitHubClient {
         catch { if Task.isCancelled { throw CancellationError() }; throw CloudError.message("GitHub 网络连接失败，请重试。") }
         guard let http = response as? HTTPURLResponse else { throw CloudError.message("GitHub 响应无效。") }
         guard http.statusCode == 200 else {
-            switch http.statusCode {
-            case 401: throw CloudError.message("GitHub Token 无效，请重新保存。")
-            case 403, 429: throw CloudError.message("GitHub 请求受限，请稍后重试或检查 Token 权限。")
-            case 404: throw CloudError.message("内容不存在或当前账号无访问权限。")
-            default: throw CloudError.message("GitHub 请求失败（HTTP \(http.statusCode)）。")
-            }
+            throw GitHubAPIError(status: http.statusCode)
         }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw CloudError.message("GitHub 数据格式无法识别。") }
@@ -106,15 +138,64 @@ final class GitHubClient {
         ])
     }
     func contents(_ repo: GitHubRepository, path: String = "") async throws -> [GitHubEntry] {
-        let entries: [GitHubEntry] = try await get(repo.apiPath + "/contents/" + path)
+        let entries: [GitHubEntry] = try await get(repo.apiPath + "/contents/" + path, query: repo.refQuery)
         return entries.sorted { a, b in
             if (a.type == "dir") != (b.type == "dir") { return a.type == "dir" }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
     }
+    func resolve(_ input: GitHubInput) async throws -> GitHubRepository {
+        guard !input.components.isEmpty else { return input.repository }
+        struct Commit: Decodable { let sha: String }
+        // Branches may contain '/'. Confirm the longest valid ref, never silently use default.
+        for boundary in stride(from: input.components.count, through: 1, by: -1) {
+            try Task.checkCancellation()
+            let candidate = input.components.prefix(boundary).joined(separator: "/")
+            do {
+                let commits: [Commit] = try await get(input.repository.apiPath + "/commits", query: [URLQueryItem(name: "sha", value: candidate), URLQueryItem(name: "per_page", value: "1")])
+                guard !commits.isEmpty else { continue }
+                var repo = input.repository
+                repo.ref = candidate; repo.initialPath = input.components.dropFirst(boundary).joined(separator: "/"); repo.initialFile = input.file
+                guard !input.file || !repo.initialPath.isEmpty else { throw CloudError.message("文件链接缺少文件路径。") }
+                return repo
+            } catch let error as GitHubAPIError where [404, 422].contains(error.status) { continue }
+        }
+        throw CloudError.message("无法确认链接中的分支、标签或提交，请检查访问权限，或从仓库首页手动指定分支。")
+    }
+    func entry(_ repo: GitHubRepository, path: String) async throws -> GitHubEntry {
+        try await get(repo.apiPath + "/contents/" + path, query: repo.refQuery, accept: "application/vnd.github.object+json")
+    }
+    func fileDownload(_ repo: GitHubRepository, path: String) async throws -> CloudDownload {
+        let file = try await entry(repo, path: path)
+        guard file.type == "file", file.path == path, file.size >= 0, file.size <= 100 * 1024 * 1024 else { throw CloudError.message("仓库文件超出 Contents API 范围或不是普通文件，请使用 Releases。") }
+        if token.isEmpty {
+            guard let url = file.download_url, Self.safe(url) else { throw CloudError.message("GitHub 未返回可公开下载的文件地址，请选择有权限的 Token。") }
+            return CloudDownload(url: url, filename: file.name, size: file.size, headers: [:])
+        }
+        let url = try apiURL(repo.apiPath + "/contents/" + file.path, query: repo.refQuery)
+        return CloudDownload(url: url, filename: file.name, size: file.size, headers: downloadHeaders(accept: "application/vnd.github.raw+json"))
+    }
+    func releaseDownload(_ repo: GitHubRepository, asset: GitHubRelease.Asset) throws -> CloudDownload {
+        guard asset.id > 0, asset.size >= 0 else { throw CloudError.message("GitHub 发布附件信息无效。") }
+        if token.isEmpty {
+            guard Self.safe(asset.browser_download_url) else { throw CloudError.message("GitHub 发布附件地址不安全。") }
+            return CloudDownload(url: asset.browser_download_url, filename: asset.name, size: asset.size, headers: [:])
+        }
+        let url = try apiURL(repo.apiPath + "/releases/assets/" + String(asset.id))
+        return CloudDownload(url: url, filename: asset.name, size: asset.size, headers: downloadHeaders(accept: "application/octet-stream"))
+    }
+    private func downloadHeaders(accept: String) -> [String: String] {
+        ["Authorization": "Bearer " + token, "Accept": accept, "User-Agent": "YunX-iOS"]
+    }
+    private func apiURL(_ path: String, query: [URLQueryItem] = []) throws -> URL {
+        var parts = URLComponents(); parts.scheme = "https"; parts.host = "api.github.com"; parts.path = path; parts.queryItems = query.isEmpty ? nil : query
+        guard let url = parts.url else { throw CloudError.message("GitHub 下载地址无效。") }
+        return url
+    }
+    private static func safe(_ url: URL) -> Bool { url.scheme?.lowercased() == "https" && url.host != nil && url.user == nil && url.password == nil }
     func readme(_ repo: GitHubRepository) async throws -> String {
         struct Document: Decodable { let content: String; let encoding: String }
-        let document: Document = try await get(repo.apiPath + "/readme")
+        let document: Document = try await get(repo.apiPath + "/readme", query: repo.refQuery)
         guard document.encoding == "base64", let data = Data(base64Encoded: document.content, options: .ignoreUnknownCharacters),
               let text = String(data: data, encoding: .utf8) else { throw CloudError.message("README 不是可显示的 UTF-8 文本。") }
         return text
@@ -122,6 +203,7 @@ final class GitHubClient {
     func readmeHTML(_ repo: GitHubRepository) async throws -> String {
         var parts = URLComponents()
         parts.scheme = "https"; parts.host = "api.github.com"; parts.path = repo.apiPath + "/readme"
+        parts.queryItems = repo.refQuery.isEmpty ? nil : repo.refQuery
         guard let url = parts.url else { throw CloudError.message("README 地址无效。") }
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github.html+json", forHTTPHeaderField: "Accept")
@@ -152,6 +234,8 @@ struct GitHubScreen: View {
     @State private var organization = false
     @State private var repo: GitHubRepository?
     @State private var message: String?
+    @State private var opening = false
+    @State private var action: Task<Void, Never>?
     var body: some View {
         NavigationStack {
             Form {
@@ -165,13 +249,20 @@ struct GitHubScreen: View {
                     }
                     LibraryPicker(platform: "GitHub") { input = $0 }
                     Button("打开仓库") {
-                        do {
-                            let parsed = try GitHubRepository.parse(input)
-                            repo = parsed; message = nil
-                            library.record(platform: "GitHub", text: parsed.owner + "/" + parsed.name)
+                        action = Task { @MainActor in
+                            opening = true; message = nil
+                            defer { opening = false }
+                            do {
+                                let parsed = try GitHubInput.parse(input)
+                                let client = GitHubClient(token: vault.accounts.first { $0.id == accountID && $0.platform == "GitHub" }?.secret ?? "")
+                                let resolved = try await client.resolve(parsed)
+                                try Task.checkCancellation()
+                                repo = resolved
+                                library.record(platform: "GitHub", text: resolved.historyText)
+                            } catch { if !Task.isCancelled { message = error.localizedDescription } }
                         }
-                        catch { message = error.localizedDescription }
-                    }
+                    }.disabled(opening)
+                    if opening { ProgressView("确认链接中的分支…") }
                     if let message { Text(message).foregroundStyle(.red) }
                 }
                 Section("用户与组织") {
@@ -183,11 +274,12 @@ struct GitHubScreen: View {
                     }.disabled(owner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Section {
-                    Text("在账号页保存 GitHub Token 可提高 API 限额或浏览授权仓库。当前下载仅支持公开文件，私有文件不会携带 Token 下载。目录最多显示 1000 项。")
+                    Text("支持仓库、tree 目录和 blob 文件链接，可指定分支/标签/提交。Token 仅发送到 GitHub 官方 API；私有下载先由官方 API 鉴权，跨源跳转时移除 Token。仓库文件受 100MB Contents API 限制，目录最多显示 1000 项。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("GitHub")
                 .onAppear { if accountID == nil { accountID = vault.accounts.first(where: { $0.platform == "GitHub" && $0.isPrimary == true })?.id } }
+                .onDisappear { action?.cancel() }
                 .navigationDestination(isPresented: Binding(get: { repo != nil }, set: { if !$0 { repo = nil } })) {
                     if let repo {
                         GitHubRepositoryScreen(repo: repo, client: GitHubClient(token: vault.accounts.first { $0.id == accountID && $0.platform == "GitHub" }?.secret ?? ""), downloads: downloads)
@@ -200,11 +292,26 @@ struct GitHubRepositoryScreen: View {
     let repo: GitHubRepository
     let client: GitHubClient
     @ObservedObject var downloads: DownloadStore
+    @State private var reference: String
+    init(repo: GitHubRepository, client: GitHubClient, downloads: DownloadStore) {
+        self.repo = repo; self.client = client; self.downloads = downloads
+        _reference = State(initialValue: repo.ref ?? "")
+    }
+    private var selected: GitHubRepository {
+        var value = repo
+        let ref = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.ref = ref.isEmpty ? nil : ref
+        return value
+    }
     var body: some View {
         List {
-            NavigationLink("文件目录") { GitHubDirectoryScreen(repo: repo, client: client, downloads: downloads) }
-            NavigationLink("README") { GitHubReadmeScreen(repo: repo, client: client) }
-            NavigationLink("Releases") { GitHubReleasesScreen(repo: repo, client: client, downloads: downloads) }
+            TextField("分支/标签/提交（留空使用默认分支）", text: $reference).textInputAutocapitalization(.never).autocorrectionDisabled()
+            if repo.initialFile {
+                NavigationLink("链接中的文件") { GitHubFileScreen(repo: selected, client: client, downloads: downloads, path: repo.initialPath) }
+            } else { NavigationLink("文件目录") { GitHubDirectoryScreen(repo: selected, client: client, downloads: downloads) } }
+            if !repo.initialPath.isEmpty { NavigationLink("仓库根目录") { GitHubDirectoryScreen(repo: selected, client: client, downloads: downloads, path: "") } }
+            NavigationLink("README") { GitHubReadmeScreen(repo: selected, client: client) }
+            NavigationLink("Releases") { GitHubReleasesScreen(repo: selected, client: client, downloads: downloads) }
         }.navigationTitle(repo.name)
     }
 }
@@ -212,35 +319,77 @@ struct GitHubDirectoryScreen: View {
     let repo: GitHubRepository
     let client: GitHubClient
     @ObservedObject var downloads: DownloadStore
-    var path = ""
+    var path: String? = nil
+    private var effectivePath: String { path ?? repo.initialPath }
     @State private var entries: [GitHubEntry] = []
     @State private var loading = false
     @State private var message: String?
+    @State private var pending = Set<String>()
     var body: some View {
         List {
             if loading { ProgressView() }
             if let message { Text(message).foregroundStyle(.secondary) }
+            if !effectivePath.isEmpty {
+                NavigationLink("上一级目录") { GitHubDirectoryScreen(repo: repo, client: client, downloads: downloads, path: (effectivePath as NSString).deletingLastPathComponent) }
+            }
             if entries.count >= 1000 { Text("目录达到 API 1000 项上限，可能未显示全部文件。") }
             ForEach(entries) { entry in
                 if entry.type == "dir" {
                     NavigationLink { GitHubDirectoryScreen(repo: repo, client: client, downloads: downloads, path: entry.path) } label: {
                         Label(entry.name, systemImage: "folder")
                     }
-                } else if entry.type == "file", let url = entry.download_url {
-                    Button {
-                        message = downloads.add(url, filename: entry.name, expectedSize: entry.size) ? "已加入下载：" + entry.name : downloads.storageError
-                    } label: { Label(entry.name, systemImage: "arrow.down.doc") }
+                } else if entry.type == "file" {
+                    Button { Task { await download(entry) } } label: { Label(entry.name, systemImage: "arrow.down.doc") }
+                        .disabled(pending.contains(entry.path))
                 } else { Label(entry.name + "（不支持下载）", systemImage: "doc") }
             }
-        }.navigationTitle(path.isEmpty ? "文件" : (path as NSString).lastPathComponent)
-            .task { await load() }.refreshable { await load() }
+        }.navigationTitle(effectivePath.isEmpty ? "文件" : (effectivePath as NSString).lastPathComponent)
+            .task(id: effectivePath + "|" + (repo.ref ?? "")) { await load() }.refreshable { await load() }
     }
     @MainActor private func load() async {
         guard !loading else { return }
         loading = true; message = nil
         defer { loading = false }
-        do { entries = try await client.contents(repo, path: path) }
+        do { entries = try await client.contents(repo, path: effectivePath) }
         catch { if !Task.isCancelled { message = error.localizedDescription } }
+    }
+    @MainActor private func download(_ entry: GitHubEntry) async {
+        guard pending.insert(entry.path).inserted else { return }
+        defer { pending.remove(entry.path) }
+        do {
+            let plan = try await client.fileDownload(repo, path: entry.path)
+            message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size) ? "已加入下载：" + plan.filename : downloads.storageError
+        } catch { if !Task.isCancelled { message = error.localizedDescription } }
+    }
+}
+
+struct GitHubFileScreen: View {
+    let repo: GitHubRepository
+    let client: GitHubClient
+    @ObservedObject var downloads: DownloadStore
+    let path: String
+    @State private var entry: GitHubEntry?
+    @State private var message: String?
+    @State private var busy = false
+    var body: some View {
+        List {
+            Text(path).font(.footnote)
+            if let entry { Text(ByteCountFormatter.string(fromByteCount: entry.size, countStyle: .file)) }
+            if let message { Text(message) }
+            Button("下载文件") { Task { await download() } }.disabled(busy || entry == nil)
+            if busy { ProgressView() }
+        }.navigationTitle((path as NSString).lastPathComponent).task {
+            do { entry = try await client.entry(repo, path: path) }
+            catch { if !Task.isCancelled { message = error.localizedDescription } }
+        }
+    }
+    @MainActor private func download() async {
+        guard !busy else { return }
+        busy = true; defer { busy = false }
+        do {
+            let plan = try await client.fileDownload(repo, path: path)
+            message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size) ? "已加入下载。" : downloads.storageError
+        } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
 }
 struct GitHubReadmeScreen: View {
@@ -326,7 +475,10 @@ struct GitHubReleasesScreen: View {
                     if let body = release.body { Text(body).textSelection(.enabled) }
                     ForEach(release.assets) { asset in
                         Button {
-                            message = downloads.add(asset.browser_download_url, filename: asset.name, expectedSize: asset.size) ? "已加入下载：" + asset.name : downloads.storageError
+                            do {
+                                let plan = try client.releaseDownload(repo, asset: asset)
+                                message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size) ? "已加入下载：" + asset.name : downloads.storageError
+                            } catch { message = error.localizedDescription }
                         } label: { Label(asset.name, systemImage: "arrow.down.circle") }
                     }
                 }

@@ -13,6 +13,7 @@
 - 提交 `9d19169`：70 项测试运行，光鸭五项测试通过；HTTP 测试日志定位到下载目录白名单未包含任务子目录，后续提交补正白名单并复测。此提交没有通过完整打包流程。
 - 提交 `066ee7b`：73 项测试运行，72 项通过，HTTP 测试超时；诊断、光鸭转存任务和 iOS 加密测试通过。下一步将测试服务改为直接 TCP 完整写入及有序关闭，并继续检查传输。Java 反向解密步骤因前序失败尚未执行。
 - 提交 `e1a7373`：GitHub 全部测试、独立 Java 对 iOS 备份反向解密、arm64 设备编译和 IPA 打包上传通过；包含实际 Range 传输、正确/错误摘要、蓝奏优享 Java 参数向量、光鸭管理及诊断测试。仍不代表真实平台或设备验收。
+- 提交 `7c957b6`：84 项测试运行，两个夸克/UC 新用例的 Cookie 样例缺少 `=`，会话合并后被清空，共有七处断言失败；123 管理和三项索引保护测试通过。已改用合法的 name=value 样例复测。此提交没有通过完整打包流程。
 - 后续结果以 GitHub Actions 对应提交为准；离线接口测试不代表真实平台账号和设备验收。
 
 ## 操作约束
@@ -113,7 +114,11 @@ DHT 默认关闭，手动开启后需重启应用重建连接；Tracker 不自�
 
 ## GitHub 浏览模块（本轮新增）
 
-支持输入 `owner/repo` 或 GitHub HTTPS 仓库首页，递归浏览默认分支目录、查看 README 原始文本、分页浏览 Releases 并下载公开文件和发布附件。可选择钥匙串内 GitHub Token，仅发送给 `api.github.com`；API 禁止自动跳转，文件下载不携带 Token。支持用户/组织仓库列表分页，以及账号页的 GitHub Token 有效性验证。私有文件下载、已接入 GitHub 渲染的 README HTML 显示（关闭脚本、独立临时会话），保留原文模式；镜像测速尚未实现。单个目录受 GitHub Contents API 的 1000 项限制。新增离线测试由 GitHub Actions 执行，本机不编译或验证。
+支持输入 `owner/repo` 或 GitHub HTTPS 仓库首页，递归浏览目录、查看原文或 GitHub 渲染的 README、分页浏览 Releases、用户和组织仓库，以及账号 Token 验证。已补充 tree/blob 子路径和含斜杠分支确认、分支/标签/提交输入；目录、文件及 README 保留所选 ref，权限/限额错误不会静默回退默认分支。渲染的 README 关闭脚本并使用临时会话。
+
+已写入私有下载策略，待云端检查及真实账号验收：每次仓库文件下载先获取新元信息；所选 Token 只向 api.github.com 的 raw Contents 或 Release Asset 接口发送，跨源 CDN 跳转移除鉴权头，任务请求头保存在钥匙串。系统断点包受文件保护，可能包含系统保存的请求快照，不随诊断导出。私有仓库文件受官方 Contents API 的 100MB 限制；大文件应使用 Releases。普通目录最多 1000 项。镜像测速及回退尚未实现。
+
+协议依据：[Contents](https://docs.github.com/en/rest/repos/contents#get-repository-content)、[Release Asset](https://docs.github.com/en/rest/releases/assets#get-a-release-asset)、[Commit ref 查询](https://docs.github.com/en/rest/commits/commits#list-commits)。离线测试只由 GitHub Actions 执行，本服务器不编译或验证。
 
 ## 当前编写内容（等待真机验证）
 

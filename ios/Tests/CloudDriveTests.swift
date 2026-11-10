@@ -194,7 +194,7 @@ extension CloudDriveTests {
             let polls = MutationPolls()
             CloudMockProtocol.handler = { request in
                 XCTAssertEqual(request.url?.host, provider.apiHost)
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "test-only-cookie")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "test-only-cookie=fixture")
                 let path = request.url!.path
                 if path.hasSuffix("/token") { return (200, [:], ["status": 200, "data": ["stoken": "share-access"]]) }
                 if path.hasSuffix("/save") {
@@ -210,7 +210,7 @@ extension CloudDriveTests {
                 XCTAssertEqual(query.first(where: { $0.name == "task_id" })?.value, "save-task")
                 return (200, [:], ["status": 200, "data": ["status": polls.next() < 2 ? 1 : 2]])
             }
-            let client = client(provider, cookie: "test-only-cookie")
+            let client = client(provider, cookie: "test-only-cookie=fixture")
             let file = CloudFile(id: "file", name: "fixture.bin", size: 10, isDirectory: false, parentID: "share-parent", token: "file-access")
             try await client.mutate(.save(file: file, share: CloudShare(provider: provider, shareID: "share", passcode: ""), parent: "destination"))
             XCTAssertEqual(polls.count, 2)
@@ -223,7 +223,7 @@ extension CloudDriveTests {
             return (200, [:], ["status": 200, "data": ["status": 3]])
         }
         defer { CloudMockProtocol.handler = nil }
-        let client = client(.quark, cookie: "test-only-cookie")
+        let client = client(.quark, cookie: "test-only-cookie=fixture")
         let file = CloudFile(id: "file", name: "old.bin", size: 10, isDirectory: false, parentID: "0", token: "")
         try await client.mutate(.rename(file: file, name: "new.bin"))
         do { try await client.mutate(.move(file: file, parent: "target")); XCTFail("Failed async operation must not appear successful") }
