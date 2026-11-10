@@ -14,11 +14,12 @@ struct AssemblyJob: Codable, Identifiable {
     var received: Int64 = 0
     var total: Int64 = 0
     var error: String?
+    var segments: [URL]? = nil
     var title: String {
         switch state {
         case .preparing: return "正在准备"
-        case .downloading: return "下载音视频"
-        case .merging: return "正在合轨"
+        case .downloading: return segments == nil ? "下载音视频" : "下载视频片段"
+        case .merging: return segments == nil ? "正在合轨" : "正在拼接"
         case .pausing: return "正在暂停"
         case .paused: return "已暂停"
         case .completed: return "已完成"
@@ -65,6 +66,18 @@ final class MediaAssemblyStore: ObservableObject {
         guard save() else { jobs[position].state = .failed; jobs[position].error = storageError; return }
         actions[id] = Task { await process(id); actions.removeValue(forKey: id) }
     }
+    @discardableResult
+    func addSequence(_ assets: [MediaAsset], filename: String) -> Bool {
+        guard !unreadable, (2...200).contains(assets.count), let first = assets.first,
+              assets.allSatisfy({ $0.kind == .video && !$0.isHLS && $0.audioURL == nil && $0.headers == first.headers }) else { storageError = "只支持 2–200 个相同请求上下文的单文件视频片段。"; return false }
+        do { for asset in assets { _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers) } }
+        catch { storageError = "片段地址或请求头不受支持。"; return false }
+        var job = AssemblyJob(id: UUID(), video: first.url, audio: first.url, headers: first.headers, filename: FileNamePolicy.name((filename as NSString).deletingPathExtension + ".mp4"))
+        job.segments = assets.map(\.url)
+        jobs.insert(job, at: 0)
+        guard save() else { jobs.removeAll { $0.id == job.id }; return false }
+        resume(job.id); return true
+    }
     func pause(_ id: UUID) {
         actions[id]?.cancel()
         guard let i = jobs.firstIndex(where: { $0.id == id }), jobs[i].state != .completed else { return }
@@ -87,11 +100,14 @@ final class MediaAssemblyStore: ObservableObject {
         var staging: URL?
         do {
             guard let initial = jobs.first(where: { $0.id == id }) else { return }
-            for (position, url) in [initial.video, initial.audio].enumerated() {
+            let sources = initial.segments ?? [initial.video, initial.audio]
+            guard (2...200).contains(sources.count) else { throw CloudError.message("媒体任务片段数量无效。") }
+            for (position, url) in sources.enumerated() {
                 try Task.checkCancellation()
                 guard let current = jobs.first(where: { $0.id == id }) else { throw CancellationError() }
                 if current.trackIDs.count <= position {
-                    let request = try NativeHTTPSRequest(text: url.absoluteString, filename: position == 0 ? "video.mp4" : "audio.m4a", headers: initial.headers,
+                    let trackName = initial.segments == nil ? (position == 0 ? "video.mp4" : "audio.m4a") : "segment-\(position).mp4"
+                    let request = try NativeHTTPSRequest(text: url.absoluteString, filename: trackName, headers: initial.headers,
                                                         labels: ["yunxAssembly": id.uuidString])
                     let track = try await NativeEngine.shared.createHTTPS(request)
                     guard let i = jobs.firstIndex(where: { $0.id == id }) else {
@@ -122,12 +138,12 @@ final class MediaAssemblyStore: ObservableObject {
                 let tasks = try await NativeEngine.shared.tasks()
                 guard let i = jobs.firstIndex(where: { $0.id == id }) else { throw CancellationError() }
                 let tracks = jobs[i].trackIDs.compactMap { key in tasks.first(where: { $0.id == key }) }
-                guard tracks.count == 2, !tracks.contains(where: { $0.status == "error" }) else { throw CloudError.message("分轨下载失败，请重新解析或重试。") }
+                guard tracks.count == sources.count, !tracks.contains(where: { $0.status == "error" }) else { throw CloudError.message("媒体源下载失败，请重新解析或重试。") }
                 jobs[i].received = Self.total(tracks.map { $0.progress?.downloaded ?? 0 })
                 jobs[i].total = Self.total(tracks.map { $0.meta?.res?.size ?? 0 })
                 if tracks.allSatisfy({ $0.status == "done" }) {
                     files = tracks.compactMap { NativeEngine.shared.completedFiles($0).first }
-                    guard files.count == 2 else { throw CloudError.message("分轨文件丢失。") }
+                    guard files.count == sources.count else { throw CloudError.message("媒体源文件丢失。") }
                     break
                 }
                 try await Task.sleep(for: .milliseconds(500))
@@ -137,7 +153,8 @@ final class MediaAssemblyStore: ObservableObject {
             let folder = root.appendingPathComponent(id.uuidString, isDirectory: true)
             let scratch = folder.appendingPathComponent(".assembly-" + UUID().uuidString + ".mp4")
             staging = scratch
-            try await AVMediaAssembly.merge(video: files[0], audio: files[1], output: scratch)
+            if initial.segments != nil { try await AVMediaAssembly.concatenate(files, output: scratch) }
+            else { try await AVMediaAssembly.merge(video: files[0], audio: files[1], output: scratch) }
             try Task.checkCancellation()
             guard let final = jobs.firstIndex(where: { $0.id == id }) else { try? FileManager.default.removeItem(at: scratch); return }
             var destination = folder.appendingPathComponent(jobs[final].filename)
@@ -205,7 +222,7 @@ struct AssemblyQueueScreen: View {
                     }
                 }
             }
-            Text("合轨使用 iOS 原生无损导出。应用重启后手动继续；删除记录保留已下载和已合并文件。")
+            Text("合轨/片段拼接使用 iOS 原生无损导出；编码、尺寸或方向不兼容会保留原文件并提示失败。应用重启后手动继续；删除记录保留已下载和已合并文件。")
                 .font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("音视频合轨").sheet(item: $selected) { LocalMovieScreen(url: $0.url) }
     }

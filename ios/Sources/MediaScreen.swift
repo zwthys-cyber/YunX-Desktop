@@ -133,8 +133,12 @@ struct MediaScreen: View {
                         }
                         if result.assets.count > 1 {
                             Button("下载全部 \(result.assets.count) 个文件") { confirmAll = true }.disabled(model.busy)
-                            if provider == .bilibili {
-                                Text("同一分 P 如有多个片段，会分别下载，当前版本不自动拼接。")
+                            if result.concatenateSegments {
+                                Button("按顺序下载并拼接片段") {
+                                    if assemblies.addSequence(result.assets, filename: MediaNames.filename(result.title, fallback: "视频") + "_拼接.mp4") { model.notice = "片段已加入合轨任务，完成后保存为一个 MP4。" }
+                                    else { model.failure = assemblies.storageError }
+                                }.disabled(model.busy)
+                                Text("可分别保存原片段，也可按当前分 P 的原顺序下载并无损拼接；编码或方向不兼容会停止，原片段保留。")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
                         }

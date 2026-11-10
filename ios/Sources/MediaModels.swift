@@ -156,6 +156,7 @@ struct MediaResult {
     let selectedPart: Int
     let actualQuality: Int?
     var notice: String? = nil
+    var concatenateSegments = false
 }
 
 enum MediaNames {

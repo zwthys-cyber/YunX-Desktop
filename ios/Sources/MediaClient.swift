@@ -148,6 +148,7 @@ final class MediaClient {
                            source: URL(string: "https://www.bilibili.com/video/\(bvid)?p=\(part)")!,
                            assets: assets, parts: parts, qualities: qualities, selectedPart: part, actualQuality: actualQuality)
         result.notice = fallbackNotice
+        result.concatenateSegments = segments.count > 1
         return result
     }
 
