@@ -17,6 +17,7 @@ struct AssemblyJob: Codable, Identifiable {
     var segments: [URL]? = nil
     var pairedPhoto: Bool? = nil
     var outputID: UUID? = nil
+    var connections: Int? = nil
     var title: String {
         switch state {
         case .preparing: return "正在准备"
@@ -51,14 +52,15 @@ final class MediaAssemblyStore: ObservableObject {
         } catch { unreadable = true; storageError = "合轨记录无法读取，原文件未覆盖。" }
     }
     @discardableResult
-    func add(_ asset: MediaAsset) -> Bool {
+    func add(_ asset: MediaAsset, connections: Int = 4) -> Bool {
         guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard !unreadable, let audio = asset.audioURL else { return false }
         do {
-            _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers)
-            _ = try NativeHTTPSRequest(text: audio.absoluteString, headers: asset.headers)
+            _ = try NativeHTTPSRequest(text: asset.url.absoluteString, connections: connections, headers: asset.headers)
+            _ = try NativeHTTPSRequest(text: audio.absoluteString, connections: connections, headers: asset.headers)
         } catch { storageError = "分轨地址或请求头不受支持。"; return false }
-        let job = AssemblyJob(id: UUID(), video: asset.url, audio: audio, headers: asset.headers, filename: FileNamePolicy.name(asset.filename))
+        var job = AssemblyJob(id: UUID(), video: asset.url, audio: audio, headers: asset.headers, filename: FileNamePolicy.name(asset.filename))
+        job.connections = connections
         jobs.insert(job, at: 0)
         guard save() else { jobs.removeAll { $0.id == job.id }; return false }
         resume(job.id)
@@ -72,14 +74,15 @@ final class MediaAssemblyStore: ObservableObject {
         actions[id] = Task { await process(id); actions.removeValue(forKey: id) }
     }
     @discardableResult
-    func addSequence(_ assets: [MediaAsset], filename: String) -> Bool {
+    func addSequence(_ assets: [MediaAsset], filename: String, connections: Int = 4) -> Bool {
         guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard !unreadable, (2...200).contains(assets.count), let first = assets.first,
               assets.allSatisfy({ $0.kind == .video && !$0.isHLS && $0.audioURL == nil && $0.headers == first.headers }) else { storageError = "只支持 2–200 个相同请求上下文的单文件视频片段。"; return false }
-        do { for asset in assets { _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers) } }
+        do { for asset in assets { _ = try NativeHTTPSRequest(text: asset.url.absoluteString, connections: connections, headers: asset.headers) } }
         catch { storageError = "片段地址或请求头不受支持。"; return false }
         var job = AssemblyJob(id: UUID(), video: first.url, audio: first.url, headers: first.headers, filename: FileNamePolicy.name((filename as NSString).deletingPathExtension + ".mp4"))
         job.segments = assets.map(\.url)
+        job.connections = connections
         jobs.insert(job, at: 0)
         guard save() else { jobs.removeAll { $0.id == job.id }; return false }
         resume(job.id); return true
@@ -90,15 +93,16 @@ final class MediaAssemblyStore: ObservableObject {
         jobs[i].state = actions[id] == nil ? .paused : .pausing; save()
     }
     @discardableResult
-    func addLivePhoto(_ asset: MediaAsset) -> Bool {
+    func addLivePhoto(_ asset: MediaAsset, connections: Int = 4) -> Bool {
         guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard !unreadable, asset.kind == .image, let movie = asset.livePhotoVideoURL else { return false }
         do {
-            _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers)
-            _ = try NativeHTTPSRequest(text: movie.absoluteString, headers: asset.headers)
+            _ = try NativeHTTPSRequest(text: asset.url.absoluteString, connections: connections, headers: asset.headers)
+            _ = try NativeHTTPSRequest(text: movie.absoluteString, connections: connections, headers: asset.headers)
         } catch { storageError = "动态照片素材地址或请求头不受支持。"; return false }
         var job = AssemblyJob(id: UUID(), video: asset.url, audio: movie, headers: asset.headers, filename: FileNamePolicy.name((asset.filename as NSString).deletingPathExtension + ".jpg"))
         job.pairedPhoto = true
+        job.connections = connections
         jobs.insert(job, at: 0)
         guard save() else { jobs.removeAll { $0.id == job.id }; return false }
         resume(job.id); return true
@@ -144,7 +148,7 @@ final class MediaAssemblyStore: ObservableObject {
                 guard let current = jobs.first(where: { $0.id == id }) else { throw CancellationError() }
                 if current.trackIDs.count <= position {
                     let trackName = initial.pairedPhoto == true ? (position == 0 ? "photo.jpg" : "motion.mov") : (initial.segments == nil ? (position == 0 ? "video.mp4" : "audio.m4a") : "segment-\(position).mp4")
-                    let request = try NativeHTTPSRequest(text: url.absoluteString, filename: trackName, headers: initial.headers,
+                    let request = try NativeHTTPSRequest(text: url.absoluteString, filename: trackName, connections: initial.connections ?? 4, headers: initial.headers,
                                                         labels: ["yunxAssembly": id.uuidString])
                     let track = try await NativeEngine.shared.createHTTPS(request)
                     guard let i = jobs.firstIndex(where: { $0.id == id }) else {

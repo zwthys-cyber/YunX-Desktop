@@ -25,7 +25,7 @@ final class MediaScreenModel: ObservableObject {
 
     func clear() { result = nil; failure = nil; notice = nil }
 
-    func download(_ assets: [MediaAsset], store: DownloadStore, assemblies: MediaAssemblyStore) {
+    func download(_ assets: [MediaAsset], store: DownloadStore, assemblies: MediaAssemblyStore, connections: Int = 4) {
         guard !busy else { return }
         busy = true; failure = nil; notice = nil
         Task { @MainActor in
@@ -35,7 +35,7 @@ final class MediaScreenModel: ObservableObject {
             for asset in assets {
                 do {
                     if asset.audioURL != nil {
-                        guard assemblies.add(asset) else { throw CloudError.message(assemblies.storageError ?? "无法创建合轨任务。") }
+                        guard assemblies.add(asset, connections: connections) else { throw CloudError.message(assemblies.storageError ?? "无法创建合轨任务。") }
                     } else if asset.isHLS { try await NativeEngine.shared.createHLS(asset); hls += 1 }
                     else if !store.add(asset.url, filename: asset.filename, headers: asset.headers, expectedSize: asset.size, expectedMedia: asset.kind == .image ? "image" : "video") {
                         throw CloudError.message(store.storageError ?? "创建下载任务失败。")
@@ -69,6 +69,17 @@ struct MediaScreen: View {
     @State private var browserRoute: BrowserMediaRoute?
     @State private var action: Task<Void, Never>?
     @State private var confirmAll = false
+    private enum QueueAction {
+        case files([MediaAsset]), sequence([MediaAsset], String), live(MediaAsset)
+        var usesNativeHTTP: Bool {
+            switch self {
+            case .files(let assets): return assets.contains { $0.audioURL != nil }
+            case .sequence, .live: return true
+            }
+        }
+    }
+    private struct PendingNativeQueue { let action: QueueAction; let connections: Int }
+    @State private var pendingNativeQueue: PendingNativeQueue?
     private var accounts: [SavedCredential] { vault.accounts.filter { $0.platform == provider.rawValue } }
 
     var body: some View {
@@ -114,6 +125,9 @@ struct MediaScreen: View {
                 if let failure = model.failure { Section("提示") { Text(failure).foregroundStyle(.red) } }
                 if let notice = model.notice { Section { Text(notice).foregroundStyle(.green) } }
                 if let result = model.result {
+                    if result.concatenateSegments || result.assets.contains(where: { $0.audioURL != nil || $0.livePhotoVideoURL != nil }) {
+                        Section("原生媒体源连接") { MediaHTTPConnectionSettings(provider: provider).id(provider.rawValue) }
+                    }
                     Section("作品") {
                         Text(result.title).font(.headline)
                         Text(result.author).foregroundStyle(.secondary)
@@ -136,8 +150,7 @@ struct MediaScreen: View {
                             Button("下载全部 \(result.assets.count) 个文件") { confirmAll = true }.disabled(model.busy)
                             if result.concatenateSegments {
                                 Button("按顺序下载并拼接片段") {
-                                    if assemblies.addSequence(result.assets, filename: MediaNames.filename(result.title, fallback: "视频") + "_拼接.mp4") { model.notice = "片段已加入合轨任务，完成后保存为一个 MP4。" }
-                                    else { model.failure = assemblies.storageError }
+                                    queue(.sequence(result.assets, MediaNames.filename(result.title, fallback: "视频") + "_拼接.mp4"))
                                 }.disabled(model.busy)
                                 Text("可分别保存原片段，也可按当前分 P 的原顺序下载并无损拼接；编码或方向不兼容会停止，原片段保留。")
                                     .font(.footnote).foregroundStyle(.secondary)
@@ -154,12 +167,11 @@ struct MediaScreen: View {
                                     Text(asset.label).font(.caption).foregroundStyle(.secondary)
                                     Spacer()
                                     Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered).disabled(asset.audioURL != nil && asset.previewURL == nil)
-                                    Button("下载") { model.download([asset], store: downloads, assemblies: assemblies) }
+                                    Button("下载") { queue(.files([asset])) }
                                         .buttonStyle(.bordered).disabled(model.busy)
                                     if asset.livePhotoVideoURL != nil {
                                         Button("生成动态照片") {
-                                            if assemblies.addLivePhoto(asset) { model.notice = "已加入合轨任务，完成后可预览并保存系统动态照片。" }
-                                            else { model.failure = assemblies.storageError }
+                                            queue(.live(asset))
                                         }.buttonStyle(.bordered).disabled(model.busy)
                                     }
                                 }
@@ -188,9 +200,18 @@ struct MediaScreen: View {
             .sheet(item: $preview) { MediaPreviewScreen(asset: $0.asset) }
             .confirmationDialog("将这些文件加入前台下载任务？", isPresented: $confirmAll, titleVisibility: .visible) {
                 Button("加入全部下载") {
-                    if let result = model.result { model.download(result.assets, store: downloads, assemblies: assemblies) }
+                    if let result = model.result { execute(.files(result.assets), connections: MediaHTTPConnections.value(provider)) }
                 }
+            } message: {
+                Text("涉及分轨合成时，每个原生源文件使用 \(MediaHTTPConnections.value(provider)) 个连接；超过 32 个可能触发平台限流或增加资源占用。普通单文件使用系统会话。")
             }
+            .confirmationDialog("以所选原生连接数加入任务？", isPresented: Binding(get: { pendingNativeQueue != nil }, set: { if !$0 { pendingNativeQueue = nil } }), titleVisibility: .visible) {
+                Button("确认加入") {
+                    if let pending = pendingNativeQueue { execute(pending.action, connections: pending.connections) }
+                    pendingNativeQueue = nil
+                }
+                Button("取消", role: .cancel) { pendingNativeQueue = nil }
+            } message: { Text("每个源文件使用 \(pendingNativeQueue?.connections ?? 4) 个连接，超过 32 个可能触发平台限流、增加耗电或内存占用。") }
             .onDisappear { action?.cancel() }
         }
     }
@@ -198,6 +219,22 @@ struct MediaScreen: View {
     private func reload(part: Int, quality: Int?) {
         guard let loadedLink else { return }
         action = Task { await model.resolve(loadedLink, cookie: loadedCookie, part: part, quality: quality, preferDASH: preferDASH) }
+    }
+    private func queue(_ action: QueueAction) {
+        let connections = MediaHTTPConnections.value(provider)
+        if action.usesNativeHTTP && connections > 32 { pendingNativeQueue = PendingNativeQueue(action: action, connections: connections) }
+        else { execute(action, connections: connections) }
+    }
+    private func execute(_ action: QueueAction, connections: Int) {
+        switch action {
+        case .files(let assets): model.download(assets, store: downloads, assemblies: assemblies, connections: connections)
+        case .sequence(let assets, let filename):
+            if assemblies.addSequence(assets, filename: filename, connections: connections) { model.notice = "片段已加入合轨任务，完成后保存为一个 MP4。" }
+            else { model.failure = assemblies.storageError }
+        case .live(let asset):
+            if assemblies.addLivePhoto(asset, connections: connections) { model.notice = "已加入合轨任务，完成后可预览并保存系统动态照片。" }
+            else { model.failure = assemblies.storageError }
+        }
     }
 }
 
