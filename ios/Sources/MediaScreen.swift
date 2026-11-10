@@ -25,13 +25,25 @@ final class MediaScreenModel: ObservableObject {
     func clear() { result = nil; failure = nil; notice = nil }
 
     func download(_ assets: [MediaAsset], store: DownloadStore) {
-        var added = 0
-        for asset in assets {
-            if store.add(asset.url, filename: asset.filename, headers: asset.headers, expectedSize: asset.size) { added += 1 }
-            else { failure = store.storageError ?? "创建下载任务失败。"; break }
+        guard !busy else { return }
+        busy = true; failure = nil; notice = nil
+        Task { @MainActor in
+            defer { busy = false }
+            var added = 0
+            var hls = 0
+            for asset in assets {
+                do {
+                    if asset.isHLS { try await NativeEngine.shared.createHLS(asset); hls += 1 }
+                    else if !store.add(asset.url, filename: asset.filename, headers: asset.headers, expectedSize: asset.size) {
+                        throw CloudError.message(store.storageError ?? "创建下载任务失败。")
+                    }
+                    added += 1
+                } catch { failure = "创建媒体任务失败，请检查引擎、资源或网络。"; break }
+            }
+            notice = hls > 0 ? "已加入 \(added) 项；HLS 任务请到「下载 → 引擎任务」查看。" : "已加入 \(added) 个文件，请到「下载」查看。"
         }
-        notice = "已加入 \(added) 个文件，请到「下载」查看。"
     }
+
 }
 
 @MainActor
@@ -46,6 +58,7 @@ struct MediaScreen: View {
     @State private var loadedLink: MediaLink?
     @State private var loadedCookie = ""
     @State private var preview: MediaPreviewRoute?
+    @State private var browserRoute: BrowserMediaRoute?
     @State private var action: Task<Void, Never>?
     @State private var confirmAll = false
     private var accounts: [SavedCredential] { vault.accounts.filter { $0.platform == provider.rawValue } }
@@ -74,6 +87,10 @@ struct MediaScreen: View {
                             let cookie = accounts.first(where: { $0.id == accountID })?.secret ?? ""
                             library.record(platform: provider.rawValue, text: link.url.absoluteString)
                             loadedLink = link; loadedCookie = cookie
+                            if provider.requiresBrowser {
+                                browserRoute = BrowserMediaRoute(link: link, cookie: cookie)
+                                return
+                            }
                             model.clear()
                             action = Task { await model.resolve(link, cookie: cookie) }
                         } catch { model.failure = error.localizedDescription }
@@ -115,10 +132,11 @@ struct MediaScreen: View {
                         ForEach(result.assets) { asset in
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(asset.filename).lineLimit(2)
+                                if asset.isHLS { Text("HLS 由原生引擎合并，保存为实际 TS/fMP4 容器；当前尚未接入在线播放。").font(.caption).foregroundStyle(.secondary) }
                                 HStack {
                                     Text(asset.label).font(.caption).foregroundStyle(.secondary)
                                     Spacer()
-                                    Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered)
+                                    Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered).disabled(asset.isHLS)
                                     Button("下载") { model.download([asset], store: downloads) }
                                         .buttonStyle(.bordered).disabled(model.busy)
                                 }
@@ -129,6 +147,11 @@ struct MediaScreen: View {
             }
             .navigationTitle("视频与图集")
             .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
+            .sheet(item: $browserRoute) { route in
+                BrowserMediaResolver(route: route) { result in
+                    model.result = result; model.failure = nil; model.notice = nil
+                }
+            }
             .sheet(item: $preview) { MediaPreviewScreen(asset: $0.asset) }
             .confirmationDialog("将这些文件加入前台下载任务？", isPresented: $confirmAll, titleVisibility: .visible) {
                 Button("加入全部下载") {

@@ -18,6 +18,8 @@ targets:
     dependencies:
       - framework: Frameworks/Yunxengine.xcframework
         embed: false
+      - sdk: libc++.tbd
+      - sdk: libresolv.tbd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.zwthys.yunx

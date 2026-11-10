@@ -66,6 +66,9 @@ struct DownloadScreen: View {
                 if let error = store.storageError {
                     Section("存储提示") { Text(error).foregroundStyle(.red) }
                 }
+                Section("原生引擎") {
+                    NavigationLink("引擎任务（P2P / HLS）") { P2PScreen() }
+                }
                 Section("队列") {
                     HStack {
                         Button("全部暂停") { store.pauseAll() }.buttonStyle(.bordered)
@@ -131,7 +134,7 @@ struct AccountScreen: View {
     @State private var verification: String?
     private let platforms = [
         "夸克", "UC", "迅雷", "百度", "139", "123", "115", "光鸭",
-        "蓝奏云", "蓝奏优享", "哔哩哔哩", "Pixiv", "微博", "快手", "GitHub"
+        "蓝奏云", "蓝奏优享", "哔哩哔哩", "Pixiv", "微博", "快手", "AcFun", "抖音", "小红书", "GitHub"
     ]
 
     var body: some View {

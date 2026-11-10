@@ -10,7 +10,7 @@ final class MediaNoRedirect: NSObject, URLSessionTaskDelegate {
 
 @MainActor
 final class MediaClient {
-    static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    nonisolated static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     private let session: URLSession
 
     init(session: URLSession? = nil) {
@@ -53,6 +53,8 @@ final class MediaClient {
         case .pixiv: return try await pixiv(target, cookie: cookie)
         case .weibo: return try await WeiboClient(session: session).resolve(target, cookie: cookie)
         case .kuaishou: return try await KuaishouClient(session: session).resolve(target, cookie: cookie)
+        case .acfun: return try await AcFunClient(session: session).resolve(target, cookie: cookie)
+        case .douyin, .xhs: throw CloudError.message("此平台需要在作品页完成验证后读取，请使用应用内作品页。")
         }
     }
 

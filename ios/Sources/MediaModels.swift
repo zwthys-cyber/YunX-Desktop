@@ -6,10 +6,14 @@ enum MediaProvider: String, CaseIterable, Identifiable {
     case pixiv = "Pixiv"
     case weibo = "微博"
     case kuaishou = "快手"
+    case acfun = "AcFun"
+    case douyin = "抖音"
+    case xhs = "小红书"
     var id: String { rawValue }
+    var requiresBrowser: Bool { self == .douyin || self == .xhs }
     var supportsAccountValidation: Bool { self == .bilibili || self == .pixiv }
     var domain: String {
-        switch self { case .bilibili: return "bilibili.com"; case .pixiv: return "pixiv.net"; case .weibo: return "weibo.com"; case .kuaishou: return "kuaishou.com" }
+        switch self { case .bilibili: return "bilibili.com"; case .pixiv: return "pixiv.net"; case .weibo: return "weibo.com"; case .kuaishou: return "kuaishou.com"; case .acfun: return "acfun.cn"; case .douyin: return "douyin.com"; case .xhs: return "xiaohongshu.com" }
     }
     var origin: String { "https://www." + domain + "/" }
     var loginURL: URL {
@@ -18,6 +22,9 @@ enum MediaProvider: String, CaseIterable, Identifiable {
         case .pixiv: return URL(string: "https://accounts.pixiv.net/login")!
         case .weibo: return URL(string: "https://passport.weibo.cn/signin/login")!
         case .kuaishou: return URL(string: "https://www.kuaishou.com/")!
+        case .acfun: return URL(string: "https://www.acfun.cn/")!
+        case .douyin: return URL(string: "https://www.douyin.com/")!
+        case .xhs: return URL(string: "https://www.xiaohongshu.com/login")!
         }
     }
 }
@@ -35,7 +42,7 @@ struct MediaLink: Equatable {
         for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
             if let url = match.url, let parsed = parseURL(url) { return parsed }
         }
-        throw CloudError.message("目前支持 B 站、Pixiv、微博和快手作品链接。")
+        throw CloudError.message("支持抖音、小红书、快手、微博、AcFun、B 站和 Pixiv 作品链接。")
     }
 
     static func parseURL(_ url: URL) -> MediaLink? {
@@ -44,6 +51,28 @@ struct MediaLink: Equatable {
         let path = url.path.split(separator: "/").map(String.init)
         if ["b23.tv", "bili2233.cn"].contains(host), !path.isEmpty {
             return MediaLink(provider: .bilibili, id: "", url: url, part: 1, isShort: true)
+        }
+        if ["v.douyin.com", "www.douyin.com", "douyin.com", "www.iesdouyin.com", "iesdouyin.com"].contains(host) {
+            if host == "v.douyin.com", path.count == 1 {
+                return MediaLink(provider: .douyin, id: "", url: url, part: 1, isShort: false)
+            }
+            let tail = path.count >= 2 && ["video", "note", "slides"].contains(path[path.count - 2]) ? path.last : nil
+            let modal = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "modal_id" })?.value
+            if let id = tail ?? modal, id.range(of: "^[0-9]{5,25}$", options: .regularExpression) != nil {
+                return MediaLink(provider: .douyin, id: id, url: url, part: 1, isShort: false)
+            }
+        }
+        if ["xhslink.com", "www.xhslink.com"].contains(host), !path.isEmpty {
+            return MediaLink(provider: .xhs, id: "", url: url, part: 1, isShort: false)
+        }
+        if ["xiaohongshu.com", "www.xiaohongshu.com"].contains(host), let id = path.last,
+           id.range(of: "^[a-f0-9]{24}$", options: [.regularExpression, .caseInsensitive]) != nil,
+           (path.count == 2 && path[0] == "explore" || path.count == 3 && path[0] == "discovery" && path[1] == "item") {
+            return MediaLink(provider: .xhs, id: id, url: url, part: 1, isShort: false)
+        }
+        if ["acfun.cn", "www.acfun.cn", "m.acfun.cn"].contains(host), path.count == 2, path[0] == "v",
+           path[1].range(of: "^ac[0-9]+$", options: .regularExpression) != nil {
+            return MediaLink(provider: .acfun, id: String(path[1].dropFirst(2)), url: url, part: 1, isShort: false)
         }
         if KuaishouClient.allowed(host), let identifier = path.last,
            identifier.range(of: "^[0-9A-Za-z_-]{1,128}$", options: .regularExpression) != nil {
@@ -114,6 +143,7 @@ struct MediaAsset: Identifiable {
     let size: Int64?
     let kind: Kind
     let headers: [String: String]
+    var isHLS = false
 }
 struct MediaResult {
     let title: String

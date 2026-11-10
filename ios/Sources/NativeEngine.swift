@@ -89,6 +89,24 @@ actor NativeEngine {
             "opts": ["path": folder.path, "skipAutoCategorize": true]]
         _ = try await invoke("POST", path: "/api/v1/tasks", body: JSONSerialization.data(withJSONObject: request))
     }
+    func createHLS(_ asset: MediaAsset) async throws {
+        guard asset.isHLS, asset.url.scheme == "https", asset.url.pathExtension.lowercased() == "m3u8",
+              !asset.headers.keys.contains(where: { ["cookie", "authorization", "proxy-authorization"].contains($0.lowercased()) }) else {
+            throw CloudError.message("此 HLS 下载不支持携带账号凭证或非 HTTPS 播放列表。")
+        }
+        let request: [String: Any] = ["req": ["url": asset.url.absoluteString, "extra": ["header": asset.headers]]]
+        let resolved = try await invoke("POST", path: "/api/v1/resolve", body: JSONSerialization.data(withJSONObject: request))
+        guard let root = try JSONSerialization.jsonObject(with: resolved) as? [String: Any],
+              let data = root["data"] as? [String: Any], let rid = data["id"] as? String,
+              let resource = data["res"] as? [String: Any], let files = resource["files"] as? [[String: Any]],
+              let original = files.first?["name"] as? String else { throw CloudError.message("HLS 引擎未返回有效输出计划。") }
+        let ext = (original as NSString).pathExtension.lowercased()
+        guard ["ts", "mp4", "m4a", "aac"].contains(ext) else { throw CloudError.message("HLS 引擎返回了不受支持的输出容器。") }
+        let name = FileNamePolicy.name((asset.filename as NSString).deletingPathExtension + "." + ext)
+        let folder = downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let create: [String: Any] = ["rid": rid, "opts": ["path": folder.path, "name": name, "skipAutoCategorize": true]]
+        _ = try await invoke("POST", path: "/api/v1/tasks", body: JSONSerialization.data(withJSONObject: create))
+    }
     func configure(trackers: [String], dht: Bool, parallel: Int) async throws {
         let data = try await invoke("GET", path: "/api/v1/config")
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],

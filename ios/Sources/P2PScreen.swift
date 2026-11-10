@@ -144,7 +144,7 @@ struct P2PScreen: View {
                 Link("Gopeed 源码与 GPL-3.0", destination: URL(string: "https://github.com/GopeedLab/gopeed")!)
                 Text("固定上游版本及对应源码随 GitHub 构建产物保存。")
             }
-        }.navigationTitle("P2P 引擎")
+        }.navigationTitle("原生引擎任务")
             .task {
                 while !Task.isCancelled {
                     await store.refresh()

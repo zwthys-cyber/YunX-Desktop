@@ -22,10 +22,13 @@ cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
 go get "golang.org/x/mobile/bind@$MOBILE_REV"
+# These upstream end-to-end tests use local httptest servers, not live platforms.
+go test -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
 gomobile init
 gomobile bind -target=ios/arm64,iossimulator/arm64 -iosversion=17.0 -tags=nosqlite \
   -ldflags='-w -s' -o "$engine_root/Frameworks/Yunxengine.xcframework" ./bind/yunxengine
 # Preserve exact modified corresponding source and dependency locks with build artifacts.
 cp "$engine_root/Engine/upstream.env" "$engine_root/build/engine-source-revisions.txt"
+go mod vendor
 tar -czf "$engine_root/build/YunX-Gopeed-corresponding-source.tar.gz" \
   --exclude=.git --exclude='ui/flutter/build' .
