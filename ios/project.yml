@@ -14,6 +14,10 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+      - path: Resources
+    dependencies:
+      - framework: Frameworks/Yunxengine.xcframework
+        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.zwthys.yunx

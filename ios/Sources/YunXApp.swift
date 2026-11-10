@@ -19,6 +19,7 @@ struct YunXApp: App {
                     .tabItem { Label("下载", systemImage: "arrow.down.circle") }
                 NavigationStack {
                     List {
+                        NavigationLink("P2P 下载引擎") { P2PScreen() }
                         NavigationLink("账号管理") { AccountScreen(vault: vault) }
                         NavigationLink("认证备份") { AccountBackupScreen(vault: vault) }
                         NavigationLink("设置与收藏") { SettingsScreen(downloads: downloads) }

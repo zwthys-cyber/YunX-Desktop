@@ -1,0 +1,31 @@
+#!/bin/bash
+# SPDX-License-Identifier: AGPL-3.0-only
+set -euo pipefail
+if [ "$(uname -s)" != Darwin ]; then
+  echo "仅在用户的 Mac 或 GitHub macOS runner 构建 iOS 引擎。" >&2
+  exit 1
+fi
+cd -- "$(dirname -- "$0")"
+engine_root="$PWD"
+source Engine/upstream.env
+engine_temp="$(mktemp -d "${TMPDIR:-/tmp}/yunx-engine.XXXXXXXX")"
+trap 'rm -rf -- "$engine_temp"' EXIT
+mkdir -p Frameworks build
+# Fetch the exact source revision without compiling anything on the proxy server.
+git init "$engine_temp/gopeed"
+git -C "$engine_temp/gopeed" remote add origin https://github.com/GopeedLab/gopeed.git
+git -C "$engine_temp/gopeed" fetch --depth=1 origin "$GOPEED_REV"
+git -C "$engine_temp/gopeed" checkout --detach FETCH_HEAD
+mkdir -p "$engine_temp/gopeed/bind/yunxengine"
+cp Engine/mobile.go "$engine_temp/gopeed/bind/yunxengine/main.go"
+cd "$engine_temp/gopeed"
+export PATH="$(go env GOPATH)/bin:$PATH"
+go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
+go get "golang.org/x/mobile/bind@$MOBILE_REV"
+gomobile init
+gomobile bind -target=ios/arm64,iossimulator/arm64 -iosversion=17.0 -tags=nosqlite \
+  -ldflags='-w -s' -o "$engine_root/Frameworks/Yunxengine.xcframework" ./bind/yunxengine
+# Preserve exact modified corresponding source and dependency locks with build artifacts.
+cp "$engine_root/Engine/upstream.env" "$engine_root/build/engine-source-revisions.txt"
+tar -czf "$engine_root/build/YunX-Gopeed-corresponding-source.tar.gz" \
+  --exclude=.git --exclude='ui/flutter/build' .

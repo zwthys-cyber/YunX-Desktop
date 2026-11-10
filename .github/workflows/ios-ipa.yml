@@ -19,7 +19,7 @@ jobs:
   build:
     name: Build arm64 IPA for iOS 17
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
     steps:
@@ -42,6 +42,35 @@ jobs:
             brew install xcodegen
           fi
           xcodegen --version
+
+      - name: Install Go for native iOS engine
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Identify engine toolchain
+        id: engine-toolchain
+        shell: bash
+        run: echo "key=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore native iOS engine
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/Frameworks/Yunxengine.xcframework
+            ios/build/YunX-Gopeed-corresponding-source.tar.gz
+            ios/build/engine-source-revisions.txt
+          key: yunx-engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
+
+      - name: Build native Gopeed XCFramework
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ios/build
+          bash ios/build-engine.sh 2>&1 | tee ios/build/engine.log
 
       - name: Install JDK for desktop backup interoperability fixtures
         uses: actions/setup-java@v4
@@ -74,6 +103,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+
+      - name: Upload engine corresponding source
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: YunX-Gopeed-corresponding-source
+          path: |
+            ios/build/YunX-Gopeed-corresponding-source.tar.gz
+            ios/build/engine-source-revisions.txt
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload build log
         if: always()

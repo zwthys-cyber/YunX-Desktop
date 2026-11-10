@@ -63,3 +63,5 @@ yunx_log_*.txt
 
 # Generated exclusively by the Mac/GitHub interoperability test runner
 ios/Tests/backup-vectors.json
+
+ios/Frameworks/
