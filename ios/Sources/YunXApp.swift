@@ -297,12 +297,14 @@ struct PortStatusScreen: View {
                     Label("磁力、种子、ed2k 与 Tracker/DHT 管理", systemImage: "network")
                     Label("多账号、加密备份、历史与收藏", systemImage: "key")
                     Label("GitHub 浏览、资源浏览器与系统分享收件箱", systemImage: "shippingbox")
+                    Label("共享任务并发、自动退避重试与断点加密", systemImage: "arrow.triangle.2.circlepath")
+                    Label("GitHub 镜像、网络代理与下载目录迁移", systemImage: "externaldrive.badge.gearshape")
                 }
                 Section("仍在补齐与验收") {
                     ForEach([
-                        "统一调度、限速、多源及慢连接设置",
-                        "GitHub 镜像测速与回退",
-                        "存储目录、数据迁移与网络代理",
+                        "全局带宽限制、失效直链刷新、多源及慢连接策略",
+                        "分片级完整性校验和各平台连接数配置",
+                        "外部文件提供器授权、断开及恢复",
                         "真实账号、分享权限、图库保存与设备后台恢复"
                     ], id: \.self) { Text($0) }
                     Text("Pixiv 目前提供静态原图；平台权限、会员和验证要求仍由各平台决定。")
