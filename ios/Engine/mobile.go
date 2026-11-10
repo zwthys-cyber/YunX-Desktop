@@ -81,6 +81,10 @@ func SetProxyResolver(resolver ProxyResolver) error {
 func Start(config string) (int, error) {
     var cfg model.StartConfig
     if err := json.Unmarshal([]byte(config), &cfg); err != nil { return 0, errors.New("invalid engine configuration") }
+    var initial struct { DownloadConfig json.RawMessage `json:"downloadConfig"` }
+    if err := json.Unmarshal([]byte(config), &initial); err != nil { return 0, errors.New("invalid native startup settings") }
+    if err := base.YunxSetStartupDownloadPatch(initial.DownloadConfig); err != nil { return 0, err }
+    defer base.YunxSetStartupDownloadPatch(nil)
     disabled := false
     cfg.ApiEnable = &disabled
     cfg.MCPEnable = false
