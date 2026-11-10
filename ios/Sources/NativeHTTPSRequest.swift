@@ -16,7 +16,7 @@ struct NativeHTTPSRequest {
             throw CloudError.message("请输入不含账号密码的 HTTPS 文件直链；HLS 请从媒体解析加入。")
         }
         guard (1...512).contains(connections) else { throw CloudError.message("连接数需在 1–512 之间。") }
-        guard expectedMedia == nil || expectedMedia == "zip" else { throw CloudError.message("原生文件校验类型不受支持。") }
+        if let expectedMedia, !["zip", "image", "video"].contains(expectedMedia) { throw CloudError.message("原生文件校验类型不受支持。") }
         let digest = checksum.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard digest.isEmpty || digest.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
             throw CloudError.message("预期 SHA-256 需为 64 位十六进制。")

@@ -10,7 +10,18 @@ if source.count(marker) != 1:
     raise SystemExit("Pinned final file verification hook changed")
 source = source.replace(marker, marker + '''    if f.meta != nil && f.meta.Req != nil {
         if kind := f.meta.Req.Labels["yunxExpectedMedia"]; kind != "" {
-            if kind != "zip" || f.meta.Opts == nil || f.meta.Res == nil || len(f.meta.Res.Files) != 1 || f.meta.Res.Files[0] == nil { return errors.New("invalid expected file format") }
+            if f.meta.Opts == nil || f.meta.Res == nil || len(f.meta.Res.Files) != 1 || f.meta.Res.Files[0] == nil { return errors.New("invalid expected file format") }
+            if kind == "image" || kind == "video" {
+                switch base.YunxVerifyMedia(f.meta.SingleFilepath(), kind) {
+                case 1:
+                case 2:
+                    f.checksumFailed.Store(true)
+                    return errors.New("downloaded response is not the expected media")
+                default:
+                    return errors.New("local media verification unavailable; retry after opening the app")
+                }
+            } else {
+            if kind != "zip" { return errors.New("invalid expected file format") }
             file, err := os.Open(f.meta.SingleFilepath())
             if err != nil { return err }
             var prefix [4]byte
@@ -19,6 +30,7 @@ source = source.replace(marker, marker + '''    if f.meta != nil && f.meta.Req !
             if readErr != nil || (prefix != [4]byte{0x50, 0x4b, 0x03, 0x04} && prefix != [4]byte{0x50, 0x4b, 0x05, 0x06}) {
                 f.checksumFailed.Store(true)
                 return errors.New("downloaded response is not a ZIP file")
+            }
             }
         }
         if raw := f.meta.Req.Labels["yunxExpectedSize"]; raw != "" {

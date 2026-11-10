@@ -19,6 +19,13 @@ import (
 // profile. The callback is evaluated per HTTP request and is never serialized.
 type ProxyResolver interface { Resolve(rawURL string) string }
 type HeaderResolver interface { Headers(contextID, originalURL, targetURL string) string }
+type MediaVerifier interface { Verify(path, kind string) int }
+
+func SetMediaVerifier(verifier MediaVerifier) error {
+    if verifier == nil { return errors.New("missing local media verifier") }
+    base.YunxSetMediaVerifier(func(path, kind string) int { return verifier.Verify(path, kind) })
+    return nil
+}
 
 func SetHeaderResolver(resolver HeaderResolver) error {
     if resolver == nil { return errors.New("missing runtime header resolver") }

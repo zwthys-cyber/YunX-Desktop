@@ -25,7 +25,7 @@ final class MediaScreenModel: ObservableObject {
 
     func clear() { result = nil; failure = nil; notice = nil }
 
-    func download(_ assets: [MediaAsset], store: DownloadStore, assemblies: MediaAssemblyStore, connections: Int = 4) {
+    func download(_ assets: [MediaAsset], store: DownloadStore, assemblies: MediaAssemblyStore, connections: Int = 4, nativeFiles: Bool = false) {
         guard !busy else { return }
         busy = true; failure = nil; notice = nil
         Task { @MainActor in
@@ -37,6 +37,12 @@ final class MediaScreenModel: ObservableObject {
                     if asset.audioURL != nil {
                         guard assemblies.add(asset, connections: connections) else { throw CloudError.message(assemblies.storageError ?? "无法创建合轨任务。") }
                     } else if asset.isHLS { try await NativeEngine.shared.createHLS(asset); hls += 1 }
+                    else if nativeFiles {
+                        let request = try NativeHTTPSRequest(text: asset.url.absoluteString, filename: asset.filename,
+                            connections: connections, headers: asset.headers, accountHeaders: true,
+                            expectedSize: asset.size, expectedMedia: asset.kind == .image ? "image" : "video")
+                        try await NativeEngine.shared.createHTTPS(request)
+                    }
                     else if !store.add(asset.url, filename: asset.filename, headers: asset.headers, expectedSize: asset.size, expectedMedia: asset.kind == .image ? "image" : "video") {
                         throw CloudError.message(store.storageError ?? "创建下载任务失败。")
                     }
@@ -44,7 +50,7 @@ final class MediaScreenModel: ObservableObject {
                 } catch { failure = "创建媒体任务失败，请检查引擎、资源或网络。"; break }
             }
             if assets.contains(where: { $0.audioURL != nil }) { notice = "已加入 \(added) 项，分轨任务请到「下载 → 合轨任务」查看。"; return }
-            notice = hls > 0 ? "已加入 \(added) 项；HLS 任务请到「下载 → 引擎任务」查看。" : "已加入 \(added) 个文件，请到「下载」查看。"
+            notice = hls > 0 || nativeFiles ? "已加入 \(added) 项；原生任务请到「下载 → 原生引擎任务」查看。" : "已加入 \(added) 个文件，请到「下载」查看。"
         }
     }
 
@@ -71,14 +77,14 @@ struct MediaScreen: View {
     @State private var confirmAll = false
     private enum QueueAction {
         case files([MediaAsset]), sequence([MediaAsset], String), live(MediaAsset)
-        var usesNativeHTTP: Bool {
+        func usesNativeHTTP(nativeFiles: Bool) -> Bool {
             switch self {
-            case .files(let assets): return assets.contains { $0.audioURL != nil }
+            case .files(let assets): return assets.contains { $0.audioURL != nil || (nativeFiles && !$0.isHLS) }
             case .sequence, .live: return true
             }
         }
     }
-    private struct PendingNativeQueue { let action: QueueAction; let connections: Int }
+    private struct PendingNativeQueue { let action: QueueAction; let connections: Int; let nativeFiles: Bool }
     @State private var pendingNativeQueue: PendingNativeQueue?
     private var accounts: [SavedCredential] { vault.accounts.filter { $0.platform == provider.rawValue } }
 
@@ -125,9 +131,7 @@ struct MediaScreen: View {
                 if let failure = model.failure { Section("提示") { Text(failure).foregroundStyle(.red) } }
                 if let notice = model.notice { Section { Text(notice).foregroundStyle(.green) } }
                 if let result = model.result {
-                    if result.concatenateSegments || result.assets.contains(where: { $0.audioURL != nil || $0.livePhotoVideoURL != nil }) {
-                        Section("原生媒体源连接") { MediaHTTPConnectionSettings(provider: provider).id(provider.rawValue) }
-                    }
+                    Section("媒体下载方式与连接") { MediaHTTPConnectionSettings(provider: provider).id(provider.rawValue) }
                     Section("作品") {
                         Text(result.title).font(.headline)
                         Text(result.author).foregroundStyle(.secondary)
@@ -200,14 +204,14 @@ struct MediaScreen: View {
             .sheet(item: $preview) { MediaPreviewScreen(asset: $0.asset) }
             .confirmationDialog("将这些文件加入前台下载任务？", isPresented: $confirmAll, titleVisibility: .visible) {
                 Button("加入全部下载") {
-                    if let result = model.result { execute(.files(result.assets), connections: MediaHTTPConnections.value(provider)) }
+                    if let result = model.result { execute(.files(result.assets), connections: MediaHTTPConnections.value(provider), nativeFiles: MediaHTTPConnections.nativeFiles(provider)) }
                 }
             } message: {
-                Text("涉及分轨合成时，每个原生源文件使用 \(MediaHTTPConnections.value(provider)) 个连接；超过 32 个可能触发平台限流或增加资源占用。普通单文件使用系统会话。")
+                Text("每个原生 HTTP 文件使用 \(MediaHTTPConnections.value(provider)) 个连接；超过 32 个可能触发平台限流或增加资源占用。普通单文件使用\(MediaHTTPConnections.nativeFiles(provider) ? "原生前台" : "系统")模式。HLS 使用原有方式。")
             }
             .confirmationDialog("以所选原生连接数加入任务？", isPresented: Binding(get: { pendingNativeQueue != nil }, set: { if !$0 { pendingNativeQueue = nil } }), titleVisibility: .visible) {
                 Button("确认加入") {
-                    if let pending = pendingNativeQueue { execute(pending.action, connections: pending.connections) }
+                    if let pending = pendingNativeQueue { execute(pending.action, connections: pending.connections, nativeFiles: pending.nativeFiles) }
                     pendingNativeQueue = nil
                 }
                 Button("取消", role: .cancel) { pendingNativeQueue = nil }
@@ -222,12 +226,13 @@ struct MediaScreen: View {
     }
     private func queue(_ action: QueueAction) {
         let connections = MediaHTTPConnections.value(provider)
-        if action.usesNativeHTTP && connections > 32 { pendingNativeQueue = PendingNativeQueue(action: action, connections: connections) }
-        else { execute(action, connections: connections) }
+        let nativeFiles = MediaHTTPConnections.nativeFiles(provider)
+        if action.usesNativeHTTP(nativeFiles: nativeFiles) && connections > 32 { pendingNativeQueue = PendingNativeQueue(action: action, connections: connections, nativeFiles: nativeFiles) }
+        else { execute(action, connections: connections, nativeFiles: nativeFiles) }
     }
-    private func execute(_ action: QueueAction, connections: Int) {
+    private func execute(_ action: QueueAction, connections: Int, nativeFiles: Bool) {
         switch action {
-        case .files(let assets): model.download(assets, store: downloads, assemblies: assemblies, connections: connections)
+        case .files(let assets): model.download(assets, store: downloads, assemblies: assemblies, connections: connections, nativeFiles: nativeFiles)
         case .sequence(let assets, let filename):
             if assemblies.addSequence(assets, filename: filename, connections: connections) { model.notice = "片段已加入合轨任务，完成后保存为一个 MP4。" }
             else { model.failure = assemblies.storageError }

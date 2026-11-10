@@ -40,6 +40,7 @@ actor NativeEngine {
     private var startup: Task<Void, Error>?
     private var proxyResolver: IOSProxyResolver?
     private var headerResolver: IOSHeaderResolver?
+    private var mediaVerifier: IOSMediaVerifier?
     private var headerContextsByTask: [String: UUID] = [:]
     private var cloudContextsByTask: [String: UUID] = [:]
     private var activeOperations = 0
@@ -59,6 +60,8 @@ actor NativeEngine {
         proxyResolver = resolver
         let headers = IOSHeaderResolver()
         headerResolver = headers
+        let media = IOSMediaVerifier(root: downloads)
+        mediaVerifier = media
         let root = support
         let destination = downloads
         let dht = UserDefaults.standard.bool(forKey: "engineDHT")
@@ -69,6 +72,8 @@ actor NativeEngine {
             try DownloadStorage.prepare()
             try Self.bindProxy(resolver)
             try Self.bindHeaderResolver(headers)
+            var mediaError: NSError?
+            guard YunxengineSetMediaVerifier(media, &mediaError) else { throw CloudError.message("本地媒体校验服务配置失败。") }
             for folder in [root, destination] {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                     attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
@@ -89,7 +94,7 @@ actor NativeEngine {
         }
         startup = operation
         do { try await operation.value; await Diagnostics.shared.record(.engineStarted) }
-        catch { startup = nil; proxyResolver = nil; headerResolver = nil; await Diagnostics.shared.record(.engineStartFailed); throw error }
+        catch { startup = nil; proxyResolver = nil; headerResolver = nil; mediaVerifier = nil; await Diagnostics.shared.record(.engineStartFailed); throw error }
     }
     private static func bindProxy(_ resolver: IOSProxyResolver) throws {
         var error: NSError?
@@ -189,7 +194,7 @@ actor NativeEngine {
             var error: NSError?
             return YunxengineStopForStorage(&error)
         }.value
-        self.startup = nil; proxyResolver = nil; headerResolver = nil
+        self.startup = nil; proxyResolver = nil; headerResolver = nil; mediaVerifier = nil
         guard closed else { DownloadStorage.failClosed(); throw DownloadStorageError.unavailable }
     }
     func watchCurrentCompletions() async {
