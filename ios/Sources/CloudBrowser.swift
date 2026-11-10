@@ -176,6 +176,7 @@ final class CloudBrowserModel: ObservableObject {
         guard !busy else { return }
         busy = true; failure = nil; message = nil
         do {
+            try checkDownloadAccount()
             try await client.mutate(operation)
             message = "操作完成。"
         } catch {
@@ -193,6 +194,7 @@ final class CloudBrowserModel: ObservableObject {
         failure = nil
         defer { busy = false }
         do {
+            try checkDownloadAccount()
             let result = try await client.listPage(share: share, parentID: folder.id, page: nextPage)
             let batch = result.files
             try Task.checkCancellation()
@@ -228,7 +230,8 @@ final class CloudBrowserModel: ObservableObject {
         do {
             try checkDownloadAccount()
             let batch = try await CloudFolderCollector().collectPages(rootID: folder.id) { parent, page in
-                try await self.client.listPage(share: self.share, parentID: parent, page: page)
+                try self.checkDownloadAccount()
+                return try await self.client.listPage(share: self.share, parentID: parent, page: page)
             }
             for item in batch {
                 try Task.checkCancellation()
