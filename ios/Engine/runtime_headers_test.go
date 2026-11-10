@@ -52,22 +52,22 @@ func TestYunxPublicHTTPSRedirectRejectsPlainHTTPBeforeSendingARequest(t *testing
         })
         var target *httptest.Server
         if secureTarget { target = httptest.NewTLSServer(handler) } else { target = httptest.NewServer(handler) }
+        t.Cleanup(target.Close)
         source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             http.Redirect(w, r, target.URL, http.StatusFound)
         }))
+        t.Cleanup(source.Close)
         client := source.Client()
+        t.Cleanup(client.CloseIdleConnections)
         client.Timeout = 3*time.Second
         YunxGuardHTTPSRedirects(source.URL, client)
         response, err := client.Get(source.URL)
+        if response != nil { t.Cleanup(func() { response.Body.Close() }) }
         if secureTarget {
             if err != nil { t.Fatal(err) }
             body, readErr := io.ReadAll(response.Body)
             if readErr != nil || string(body) != "fixture" || received.Load() != 1 { t.Fatalf("secure redirect failed: %v", readErr) }
         } else if err == nil || received.Load() != 0 { t.Fatal("public HTTPS download followed an insecure redirect") }
-        if response != nil { response.Body.Close() }
-        client.CloseIdleConnections()
-        source.Close()
-        target.Close()
     }
 }
 
