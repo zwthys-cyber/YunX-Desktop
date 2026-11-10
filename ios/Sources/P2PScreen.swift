@@ -126,6 +126,7 @@ struct P2PScreen: View {
                         let total = task.meta?.res?.size ?? 0
                         Text(ByteCountFormatter.string(fromByteCount: received, countStyle: .file) + " · " + ByteCountFormatter.string(fromByteCount: task.progress?.speed ?? 0, countStyle: .file) + "/s").font(.caption)
                         if total > 0 { ProgressView(value: min(1, max(0, Double(received) / Double(total)))) }
+                        NavigationLink("Peer 与做种") { P2PPeersScreen(task: task) }.font(.caption)
                         HStack {
                             if ["running", "wait", "ready"].contains(task.status) {
                                 Button("暂停") { Task { await store.action(task, operation: "pause") } }.buttonStyle(.bordered)
@@ -169,5 +170,75 @@ struct P2PFilesScreen: View {
             if files.isEmpty { Text("没有找到可导出的完成文件。") }
             ForEach(files, id: \.self) { file in ShareLink(item: file) { Label(file.lastPathComponent, systemImage: "square.and.arrow.up") } }
         }.navigationTitle("已下载文件").task { files = NativeEngine.shared.completedFiles(task) }
+    }
+}
+
+struct EnginePeerStats: Decodable {
+    struct Peer: Decodable {
+        let address: String?
+        let client: String?
+        let downloadSpeed: Int64?
+        let uploadSpeed: Int64?
+        let completion: Double?
+        let transport: String?
+    }
+    struct Runtime: Decodable {
+        let totalPeers: Int?
+        let activePeers: Int?
+        let connectedSeeders: Int?
+        let connectedLeechers: Int?
+        let peers: [Peer]?
+    }
+    struct Snapshot: Decodable {
+        let seedBytes: Int64?
+        let seedRatio: Double?
+        let seedTime: Int64?
+    }
+    let runtime: Runtime?
+    let snapshot: Snapshot?
+}
+struct P2PPeersScreen: View {
+    let task: EngineTask
+    @State private var stats: EnginePeerStats?
+    @State private var message: String?
+    var body: some View {
+        List {
+            Section("连接概览") {
+                if let runtime = stats?.runtime {
+                    if let total = runtime.totalPeers { LabeledContent("已知 Peer", value: String(total)) }
+                    if let active = runtime.activePeers { LabeledContent("活动 Peer", value: String(active)) }
+                    if let seeds = runtime.connectedSeeders { LabeledContent("已连接做种者", value: String(seeds)) }
+                    if let leechers = runtime.connectedLeechers { LabeledContent("已连接下载者", value: String(leechers)) }
+                } else { Text("当前没有活动连接数据。") }
+                if let message { Text(message).foregroundStyle(.secondary) }
+            }
+            if let snapshot = stats?.snapshot {
+                Section("累计做种") {
+                    if let bytes = snapshot.seedBytes { LabeledContent("上传", value: ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
+                    if let ratio = snapshot.seedRatio { LabeledContent("分享率", value: String(format: "%.2f", ratio)) }
+                    if let time = snapshot.seedTime { LabeledContent("做种时长", value: "\(time) 秒") }
+                }
+            }
+            Section("Peer") {
+                ForEach(Array((stats?.runtime?.peers ?? []).enumerated()), id: \.offset) { _, peer in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(peer.address ?? "未知地址").font(.caption.monospaced()).textSelection(.enabled)
+                        Text([peer.client, peer.transport].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                        Text("↓ " + ByteCountFormatter.string(fromByteCount: peer.downloadSpeed ?? 0, countStyle: .file) + "/s  ↑ " + ByteCountFormatter.string(fromByteCount: peer.uploadSpeed ?? 0, countStyle: .file) + "/s").font(.caption)
+                        if let completion = peer.completion { ProgressView(value: min(1, max(0, completion))) }
+                    }
+                }
+            }
+        }.navigationTitle("Peer 与做种").task {
+            while !Task.isCancelled {
+                do {
+                    guard let id = task.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), !id.contains("/") else { return }
+                    let data = try await NativeEngine.shared.invoke("GET", path: "/api/v1/tasks/" + id + "/stats")
+                    stats = try JSONDecoder().decode(EngineEnvelope<EnginePeerStats>.self, from: data).data
+                    message = nil
+                } catch { if !Task.isCancelled { message = "连接统计暂不可用，任务可能仍在解析或已停止。" } }
+                do { try await Task.sleep(for: .seconds(3)) } catch { break }
+            }
+        }
     }
 }

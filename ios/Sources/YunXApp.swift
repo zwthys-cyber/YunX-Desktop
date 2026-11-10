@@ -131,7 +131,7 @@ struct AccountScreen: View {
     @State private var verification: String?
     private let platforms = [
         "夸克", "UC", "迅雷", "百度", "139", "123", "115", "光鸭",
-        "蓝奏云", "蓝奏优享", "哔哩哔哩", "Pixiv", "GitHub"
+        "蓝奏云", "蓝奏优享", "哔哩哔哩", "Pixiv", "微博", "快手", "GitHub"
     ]
 
     var body: some View {
@@ -142,7 +142,7 @@ struct AccountScreen: View {
                     ForEach(CloudProvider.allCases.filter { $0 != .pan123 }) { provider in
                         Button("登录" + provider.rawValue) { loginProvider = provider }
                     }
-                    ForEach(MediaProvider.allCases) { provider in
+                    ForEach(MediaProvider.allCases.filter { $0.supportsAccountValidation }) { provider in
                         Button("登录" + provider.rawValue) { mediaLoginProvider = provider }
                     }
                 }
@@ -175,7 +175,7 @@ struct AccountScreen: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if CloudProvider(rawValue: account.platform) != nil || MediaProvider(rawValue: account.platform) != nil || account.platform == "GitHub" {
+                            if CloudProvider(rawValue: account.platform) != nil || MediaProvider(rawValue: account.platform)?.supportsAccountValidation == true || account.platform == "GitHub" {
                                 Button(verifyingID == account.id ? "验证中" : "验证") { verify(account) }
                                     .disabled(verifyingID != nil).buttonStyle(.bordered)
                             }

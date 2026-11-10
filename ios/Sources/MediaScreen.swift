@@ -193,7 +193,7 @@ struct MediaPreviewScreen: View {
                         if let failure = movie.failure { Text(failure).foregroundStyle(.red).padding() }
                     }.onAppear { movie.start(asset) }.onDisappear { movie.stop() }
                 } else { MediaImagePreview(asset: asset) }
-            }.onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }.navigationTitle(asset.label).navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle(asset.label).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
         }
     }

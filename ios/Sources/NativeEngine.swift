@@ -70,7 +70,8 @@ actor NativeEngine {
         try await ensureStarted()
         let encoded = body.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         return try await Task.detached(priority: .utility) {
-            guard let response = YunxengineInvoke(method, path, query, encoded), let data = response.data(using: .utf8),
+            let response = YunxengineInvoke(method, path, query, encoded)
+            guard let data = response.data(using: .utf8),
                   let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["code"] as? Int == 0 else {
                 throw CloudError.message("引擎拒绝操作，请检查任务状态、资源和网络。")
             }

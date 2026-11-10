@@ -4,11 +4,21 @@ import Foundation
 enum MediaProvider: String, CaseIterable, Identifiable {
     case bilibili = "哔哩哔哩"
     case pixiv = "Pixiv"
+    case weibo = "微博"
+    case kuaishou = "快手"
     var id: String { rawValue }
-    var domain: String { self == .bilibili ? "bilibili.com" : "pixiv.net" }
+    var supportsAccountValidation: Bool { self == .bilibili || self == .pixiv }
+    var domain: String {
+        switch self { case .bilibili: return "bilibili.com"; case .pixiv: return "pixiv.net"; case .weibo: return "weibo.com"; case .kuaishou: return "kuaishou.com" }
+    }
     var origin: String { "https://www." + domain + "/" }
     var loginURL: URL {
-        URL(string: self == .bilibili ? "https://passport.bilibili.com/login" : "https://accounts.pixiv.net/login")!
+        switch self {
+        case .bilibili: return URL(string: "https://passport.bilibili.com/login")!
+        case .pixiv: return URL(string: "https://accounts.pixiv.net/login")!
+        case .weibo: return URL(string: "https://passport.weibo.cn/signin/login")!
+        case .kuaishou: return URL(string: "https://www.kuaishou.com/")!
+        }
     }
 }
 
@@ -18,13 +28,14 @@ struct MediaLink: Equatable {
     let url: URL
     let part: Int
     let isShort: Bool
+    var kind = ""
 
     static func parse(_ text: String) throws -> MediaLink {
         let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
             if let url = match.url, let parsed = parseURL(url) { return parsed }
         }
-        throw CloudError.message("目前支持 B 站视频链接、b23 短链和 Pixiv 作品链接。")
+        throw CloudError.message("目前支持 B 站、Pixiv、微博和快手作品链接。")
     }
 
     static func parseURL(_ url: URL) -> MediaLink? {
@@ -33,6 +44,30 @@ struct MediaLink: Equatable {
         let path = url.path.split(separator: "/").map(String.init)
         if ["b23.tv", "bili2233.cn"].contains(host), !path.isEmpty {
             return MediaLink(provider: .bilibili, id: "", url: url, part: 1, isShort: true)
+        }
+        if KuaishouClient.allowed(host), let identifier = path.last,
+           identifier.range(of: "^[0-9A-Za-z_-]{1,128}$", options: .regularExpression) != nil {
+            let valid = (host == "v.kuaishou.com" && path.count == 1) ||
+                (path.count >= 2 && ["short-video", "f"].contains(path[0])) ||
+                (path.count == 3 && path[0] == "fw" && ["photo", "long-video"].contains(path[1]))
+            if valid { return MediaLink(provider: .kuaishou, id: identifier, url: url, part: 1, isShort: false) }
+        }
+        if ["weibo.com", "www.weibo.com", "m.weibo.cn", "weibo.cn", "video.weibo.com", "h5.video.weibo.com"].contains(host) {
+            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if path.count >= 3, path[0] == "tv", path[1] == "show", let mid = query.first(where: { $0.name == "mid" })?.value,
+               mid.range(of: "^[0-9]{1,24}$", options: .regularExpression) != nil {
+                return MediaLink(provider: .weibo, id: mid, url: url, part: 1, isShort: false, kind: "tv")
+            }
+            let fid = query.first(where: { $0.name == "fid" })?.value ?? (path.first == "show" && path.count == 2 ? path[1] : "")
+            if fid.range(of: "^[0-9]+:[0-9]+$", options: .regularExpression) != nil {
+                return MediaLink(provider: .weibo, id: fid, url: url, part: 1, isShort: false, kind: "fid")
+            }
+            if path.count == 2, ["status", "statuses", "detail"].contains(path[0]), path[1].range(of: "^[0-9A-Za-z]{1,24}$", options: .regularExpression) != nil {
+                return MediaLink(provider: .weibo, id: path[1], url: url, part: 1, isShort: false, kind: "status")
+            }
+            if path.count == 2, path[0].allSatisfy(\.isNumber), path[1].range(of: "^[0-9A-Za-z]{6,24}$", options: .regularExpression) != nil {
+                return MediaLink(provider: .weibo, id: path[1], url: url, part: 1, isShort: false, kind: "status")
+            }
         }
         if host == "bilibili.com" || host.hasSuffix(".bilibili.com"),
            path.count >= 2, path[0] == "video",

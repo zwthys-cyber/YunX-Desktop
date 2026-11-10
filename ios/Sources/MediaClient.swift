@@ -27,6 +27,7 @@ final class MediaClient {
     deinit { session.invalidateAndCancel() }
 
     func validate(provider: MediaProvider, cookie: String) async throws -> String {
+        guard provider.supportsAccountValidation else { throw CloudError.message("此平台暂不支持账号有效性验证，可使用手动 Cookie 尝试解析。") }
         guard !cookie.isEmpty else { throw CloudError.message("请先完成登录。") }
         if provider == .bilibili {
             let root = try await json("https://api.bilibili.com/x/web-interface/nav", provider: provider, cookie: cookie)
@@ -50,6 +51,8 @@ final class MediaClient {
         switch target.provider {
         case .bilibili: return try await bilibili(target, cookie: cookie, part: part ?? target.part, quality: quality)
         case .pixiv: return try await pixiv(target, cookie: cookie)
+        case .weibo: return try await WeiboClient(session: session).resolve(target, cookie: cookie)
+        case .kuaishou: return try await KuaishouClient(session: session).resolve(target, cookie: cookie)
         }
     }
 
