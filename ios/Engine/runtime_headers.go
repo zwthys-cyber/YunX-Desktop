@@ -89,3 +89,19 @@ func YunxGuardRuntimeHeaderRedirects(id, originalURL string, client *http.Client
         return YunxApplyRuntimeHeaders(id, originalURL, request)
     }
 }
+
+// Public requests need the same HTTPS downgrade protection as credentialed
+// requests; the header-vault guard alone is intentionally absent without an ID.
+func YunxGuardHTTPSRedirects(originalURL string, client *http.Client) {
+    original, err := url.Parse(originalURL)
+    if err != nil || !strings.EqualFold(original.Scheme, "https") { return }
+    previous := client.CheckRedirect
+    client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+        if request == nil || request.URL == nil || !strings.EqualFold(request.URL.Scheme, "https") {
+            return errors.New("HTTPS download redirect cannot downgrade transport")
+        }
+        if len(via) >= 10 { return errors.New("too many native download redirects") }
+        if previous != nil { return previous(request, via) }
+        return nil
+    }
+}

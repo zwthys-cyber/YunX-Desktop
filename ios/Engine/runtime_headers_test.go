@@ -43,6 +43,34 @@ func TestYunxRuntimeCredentialsStripAtCrossPortRedirect(t *testing.T) {
     if got := <-received; got != "||fixture-browser-hint" { t.Fatal("credentials crossed an origin or the safe UC client hint was lost") }
 }
 
+func TestYunxPublicHTTPSRedirectRejectsPlainHTTPBeforeSendingARequest(t *testing.T) {
+    for _, secureTarget := range []bool{false, true} {
+        var received atomic.Int32
+        handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            received.Add(1)
+            io.WriteString(w, "fixture")
+        })
+        var target *httptest.Server
+        if secureTarget { target = httptest.NewTLSServer(handler) } else { target = httptest.NewServer(handler) }
+        source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            http.Redirect(w, r, target.URL, http.StatusFound)
+        }))
+        client := source.Client()
+        client.Timeout = 3*time.Second
+        YunxGuardHTTPSRedirects(source.URL, client)
+        response, err := client.Get(source.URL)
+        if secureTarget {
+            if err != nil { t.Fatal(err) }
+            body, readErr := io.ReadAll(response.Body)
+            if readErr != nil || string(body) != "fixture" || received.Load() != 1 { t.Fatalf("secure redirect failed: %v", readErr) }
+        } else if err == nil || received.Load() != 0 { t.Fatal("public HTTPS download followed an insecure redirect") }
+        if response != nil { response.Body.Close() }
+        client.CloseIdleConnections()
+        source.Close()
+        target.Close()
+    }
+}
+
 func TestYunxRuntimeCredentialsSurviveSameOriginRedirect(t *testing.T) {
     YunxSetRuntimeHeaderResolver(func(_, _, _ string) (http.Header, error) {
         return http.Header{"Cookie": {"fixture-cookie=bound"}}, nil

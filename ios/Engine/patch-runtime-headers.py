@@ -17,5 +17,5 @@ source = source.replace(request, request + '''    if err = base.YunxApplyRuntime
 source = source.replace(jar, '''    var jar http.CookieJar
     if f.meta.Req.Labels[base.YunxHeaderContextLabel] == "" { jar, _ = cookiejar.New(nil) }
 ''')
-source = source.replace(client, client.replace("\treturn client\n", "    base.YunxGuardRuntimeHeaderRedirects(f.meta.Req.Labels[base.YunxHeaderContextLabel], f.meta.Req.URL, client)\n\treturn client\n"))
+source = source.replace(client, client.replace("\treturn client\n", "    base.YunxGuardRuntimeHeaderRedirects(f.meta.Req.Labels[base.YunxHeaderContextLabel], f.meta.Req.URL, client)\n    base.YunxGuardHTTPSRedirects(f.meta.Req.URL, client)\n\treturn client\n"))
 path.write_text(source)
