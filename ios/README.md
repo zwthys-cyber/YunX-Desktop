@@ -4,9 +4,9 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 ## 构建与验证状态
 
-最后完整成功的基线为 [`3c7bf70`](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/42838333324)：185 项模拟器测试零失败、独立 Java 对 iOS 加密备份的反向解密、主应用与分享扩展设备编译及 IPA 打包成功。
+最后完整成功的基线为 [`6176e55`](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/42851795531)：186 项模拟器测试零失败、独立 Java 对 iOS 加密备份的反向解密、主应用与分享扩展设备编译及 IPA 打包成功。
 
-该轮包含真实钥匙串访问、Swift/Go HTTP 代理、共享任务配额、实际 HTTP 503 退避重试、目录迁移、GitHub 鉴权/ZIP/镜像策略、断点加密，以及原生 HTTP 共享限速的实际字节传输测试。原生账号请求头已通过真实 HTTP 请求、跨源重定向、Keychain 重读与磁盘无明文凭证检查，引擎并发与 Tracker 设置重启恢复也已通过。Go 侧另通过预读复制故障、暂停恢复、共享速率和取消用例。后续网盘原生下载入口、平台文件大小核对及可恢复保存改动须单独查看 [GitHub Actions](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port)，不能直接继承旧提交的成功结论。
+该轮包含真实钥匙串访问、Swift/Go HTTP 代理、共享任务配额、实际 HTTP 503 退避重试、目录迁移、GitHub 鉴权/ZIP/镜像策略、断点加密，以及原生 HTTP 共享限速的实际字节传输测试。原生账号请求头已通过真实 HTTP 请求、跨源重定向、Keychain 重读与磁盘无明文凭证检查，引擎并发与 Tracker 设置重启恢复也已通过。网盘原生下载入口已编译，Go 侧另通过文件大小不匹配拒绝、预读复制故障、暂停恢复、共享速率和取消用例。后续可恢复保存及 HTTP/2/缓冲改动须单独查看 [GitHub Actions](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port)，不能直接继承旧提交的成功结论。
 
 当前没有真实平台账号、iOS 17 设备安装或 TrollStore 共享容器验收记录。确定性的接口用例及较新 iOS 模拟器测试不能替代这些结果。早期失败与修复过程可查 Git 历史和 Actions，本页描述当前实现及其限制。
 
@@ -34,7 +34,7 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 - 普通文件使用 URLSession；符合策略的公开 HTTPS 文件可使用系统后台会话，鉴权请求及手动代理使用前台会话。已有后台任务在启动后重新关联，其他任务需手动继续。系统可能延迟或暂停后台传输，强制退出后需重新打开应用。
 - 原生 Gopeed 在进程内处理多连接 HTTPS、HLS、磁力、BT 种子和 ed2k；HTTP API、Web 和 MCP 服务关闭。HTTPS 支持 1–512 个连接，超过 32 个需确认，可提供预期整文件 SHA-256。P2P 支持 Tracker/DHT 设置及 peer 概览，实际公网和后台行为仍待设备验收。
-- 网盘浏览页可选择原生多连接下载，十个平台分别保存连接数，单文件和目录批量使用同一选项。Cookie/Authorization 经 Keychain 运行时提供，原生任务记录不写入这些请求头；平台提供正数文件大小时完成前强制核对。此入口新增改动的检查结果以上述 Actions 对应提交为准。
+- 网盘浏览页可选择原生多连接下载，十个平台分别保存连接数，单文件和目录批量使用同一选项。Cookie/Authorization 经 Keychain 运行时提供，原生任务记录不写入这些请求头；平台提供正数文件大小时完成前强制核对。入口已通过上述编译回归，真实网盘仍需账号及设备验收。
 - 原生 HTTP 文件共享限速已通过云端共享预算、取消和实际传输测试，单位 KiB/s，0 表示不限；设置变化及暂停可唤醒等待者，限速等待不计入网络无进度超时。只覆盖原生 HTTP 文件读取，普通 URLSession、HLS 及 P2P 不在范围内，不能视为已完成跨引擎全局限速。
 - 原生 HTTP 传输页新增 HTTP/2 和 16–4096 KiB 读缓冲设置；新建/重连连接生效，单任务连接缓冲合计上限 64 MiB。关闭 HTTP/2 时原生及浏览器回退均强制 HTTP/1.1；HLS、系统会话和 P2P 保留各自方式。新增真实 TLS 协商及自动回退检查，待对应提交云端结果。
 - 统一调度已接入 URLSession 与原生引擎的共享任务配额，包含启动后台恢复屏障、物理取消后释放配额及过期回调隔离；共享配额及真实传输用例已通过。瞬时网络故障和指定临时 HTTP 状态最多自动退避重试三次，不自动重试认证或证书错误。
