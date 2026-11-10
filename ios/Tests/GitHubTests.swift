@@ -3,6 +3,60 @@ import XCTest
 @testable import YunX
 
 final class GitHubTests: XCTestCase {
+    func testCommitDateUsesExactDirectoryAndSelectedBranch() async throws {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MediaMockProtocol.self]
+        MediaMockProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "api.github.com")
+            XCTAssertEqual(request.url?.path, "/repos/owner/repo/commits")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertTrue(query.contains(URLQueryItem(name: "path", value: "中文 folder/sub")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "sha", value: "release/mobile")))
+            return (200, [:], [["commit": ["committer": ["date": "2026-01-02T03:04:05Z"]]]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = GitHubClient(session: URLSession(configuration: config))
+        var repo = GitHubRepository(owner: "owner", name: "repo"); repo.ref = "release/mobile"
+        let date = try await client.latestCommitDate(repo, path: "中文 folder/sub")
+        XCTAssertEqual(date, ISO8601DateFormatter().date(from: "2026-01-02T03:04:05Z"))
+    }
+    func testArchivePinsSlashBranchToCommitAndKeepsTokenOnOfficialAPI() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MediaMockProtocol.self]
+        let sha = String(repeating: "a", count: 40)
+        MediaMockProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "api.github.com")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer archive-token")
+            if request.url?.path.hasSuffix("/commits") == true {
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertTrue(query.contains(URLQueryItem(name: "sha", value: "feature/中文")))
+                XCTAssertTrue(query.contains(URLQueryItem(name: "per_page", value: "1")))
+                return (200, [:], [["sha": sha]])
+            }
+            return (200, [:], ["full_name": "owner/repo", "default_branch": "main", "fork": true,
+                              "parent": ["full_name": "upstream/original"]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = GitHubClient(token: "archive-token", session: URLSession(configuration: config))
+        var repo = GitHubRepository(owner: "owner", name: "repo"); repo.ref = "feature/中文"
+        let detail = try await client.repositoryDetail(repo)
+        XCTAssertEqual(detail.parent?.full_name, "upstream/original")
+        let plan = try await client.archiveDownload(repo)
+        XCTAssertEqual(plan.url.absoluteString, "https://api.github.com/repos/owner/repo/zipball/" + sha)
+        XCTAssertEqual(plan.filename, "repo-aaaaaaaaaaaa.zip")
+        XCTAssertEqual(plan.headers["Authorization"], "Bearer archive-token")
+        XCTAssertFalse(GitHubMirrorPolicy.publicOrigin(plan.url))
+    }
+    func testEmptyRepositoryCannotQueueAnUnpinnedArchive() async throws {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MediaMockProtocol.self]
+        MediaMockProtocol.handler = { request in
+            if request.url?.path.hasSuffix("/commits") == true { return (200, [:], []) }
+            return (200, [:], ["full_name": "owner/repo", "default_branch": "main", "fork": false])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = GitHubClient(session: URLSession(configuration: config))
+        do { _ = try await client.archiveDownload(GitHubRepository(owner: "owner", name: "repo")); XCTFail("Empty archive accepted") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("提交")) }
+    }
     func testRepositoryInputRejectsForeignHostsAndTraversal() throws {
         XCTAssertEqual(try GitHubRepository.parse("https://github.com/owner/repo.git"), GitHubRepository(owner: "owner", name: "repo"))
         XCTAssertEqual(try GitHubRepository.parse(" owner/repo ").apiPath, "/repos/owner/repo")

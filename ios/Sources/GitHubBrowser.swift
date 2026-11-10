@@ -75,6 +75,13 @@ struct GitHubEntry: Decodable, Identifiable {
     let download_url: URL?
     var id: String { path }
 }
+struct GitHubRepositoryDetail: Decodable {
+    struct Parent: Decodable { let full_name: String }
+    let full_name: String
+    let default_branch: String
+    let fork: Bool
+    let parent: Parent?
+}
 struct GitHubRelease: Decodable, Identifiable {
     struct Asset: Decodable, Identifiable {
         let id: Int64
@@ -171,6 +178,45 @@ final class GitHubClient {
             if (a.type == "dir") != (b.type == "dir") { return a.type == "dir" }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
+    }
+    func repositoryDetail(_ repo: GitHubRepository) async throws -> GitHubRepositoryDetail {
+        try await get(repo.apiPath)
+    }
+    func latestCommitDate(_ repo: GitHubRepository, path: String) async throws -> Date? {
+        struct Commit: Decodable {
+            struct Details: Decodable {
+                struct Person: Decodable { let date: String? }
+                let committer: Person?
+            }
+            let commit: Details
+        }
+        var query = [URLQueryItem(name: "path", value: path), URLQueryItem(name: "per_page", value: "1")]
+        if let ref = repo.ref { query.append(URLQueryItem(name: "sha", value: ref)) }
+        let commits: [Commit] = try await get(repo.apiPath + "/commits", query: query)
+        guard let date = commits.first?.commit.committer?.date else { return nil }
+        return ISO8601DateFormatter().date(from: date)
+    }
+    func archiveDownload(_ repo: GitHubRepository) async throws -> CloudDownload {
+        // Resolve a branch to an immutable commit before queuing. A later default
+        // branch change must not silently change the archive selected by the user.
+        let detail = try await repositoryDetail(repo)
+        let reference = repo.ref ?? detail.default_branch
+        guard !reference.isEmpty, reference.utf8.count <= 1024,
+              !reference.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            throw CloudError.message("GitHub 分支无效。")
+        }
+        struct Commit: Decodable { let sha: String }
+        let commits: [Commit] = try await get(repo.apiPath + "/commits", query: [
+            URLQueryItem(name: "sha", value: reference), URLQueryItem(name: "per_page", value: "1")
+        ])
+        guard let sha = commits.first?.sha, sha.count == 40,
+              sha.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+            throw CloudError.message("该分支没有可下载的提交。")
+        }
+        let token = try await authorizationToken()
+        let url = try apiURL(repo.apiPath + "/zipball/" + sha)
+        return CloudDownload(url: url, filename: repo.name + "-" + String(sha.prefix(12)) + ".zip", size: 0,
+                             headers: token.isEmpty ? [:] : downloadHeaders(token: token, accept: "application/vnd.github+json"))
     }
     func resolve(_ input: GitHubInput) async throws -> GitHubRepository {
         guard !input.components.isEmpty else { return input.repository }
@@ -342,6 +388,9 @@ struct GitHubRepositoryScreen: View {
     let client: GitHubClient
     @ObservedObject var downloads: DownloadStore
     @State private var reference: String
+    @State private var detail: GitHubRepositoryDetail?
+    @State private var message: String?
+    @State private var downloadingArchive = false
     init(repo: GitHubRepository, client: GitHubClient, downloads: DownloadStore) {
         self.repo = repo; self.client = client; self.downloads = downloads
         _reference = State(initialValue: repo.ref ?? "")
@@ -354,6 +403,8 @@ struct GitHubRepositoryScreen: View {
     }
     var body: some View {
         List {
+            if let parent = detail?.parent { Text("Fork 自 " + parent.full_name).foregroundStyle(.secondary) }
+            if let message { Text(message).foregroundStyle(.secondary) }
             TextField("分支/标签/提交（留空使用默认分支）", text: $reference).textInputAutocapitalization(.never).autocorrectionDisabled()
             if repo.initialFile {
                 NavigationLink("链接中的文件") { GitHubFileScreen(repo: selected, client: client, downloads: downloads, path: repo.initialPath) }
@@ -361,7 +412,23 @@ struct GitHubRepositoryScreen: View {
             if !repo.initialPath.isEmpty { NavigationLink("仓库根目录") { GitHubDirectoryScreen(repo: selected, client: client, downloads: downloads, path: "") } }
             NavigationLink("README") { GitHubReadmeScreen(repo: selected, client: client) }
             NavigationLink("Releases") { GitHubReleasesScreen(repo: selected, client: client, downloads: downloads) }
+            Button(downloadingArchive ? "正在准备 ZIP…" : "下载所选分支 ZIP") {
+                let snapshot = selected
+                downloadingArchive = true
+                Task { @MainActor in
+                    defer { downloadingArchive = false }
+                    do {
+                        let plan = try await client.archiveDownload(snapshot)
+                        message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers) ? "ZIP 已加入下载" : downloads.storageError
+                    } catch { if !Task.isCancelled { message = error.localizedDescription } }
+                }
+            }.disabled(downloadingArchive)
+            Text("ZIP 固定为准备时的提交，走 GitHub 官方接口；私有仓库使用所选账号权限。").font(.caption).foregroundStyle(.secondary)
         }.navigationTitle(repo.name)
+            .task {
+                do { detail = try await client.repositoryDetail(repo) }
+                catch { if !Task.isCancelled { message = error.localizedDescription } }
+            }
     }
 }
 struct GitHubDirectoryScreen: View {
@@ -374,6 +441,9 @@ struct GitHubDirectoryScreen: View {
     @State private var loading = false
     @State private var message: String?
     @State private var pending = Set<String>()
+    @State private var commitDates: [String: Date] = [:]
+    @State private var datedCount = 0
+    @State private var loadingDates = false
     var body: some View {
         List {
             if loading { ProgressView() }
@@ -382,13 +452,19 @@ struct GitHubDirectoryScreen: View {
                 NavigationLink("上一级目录") { GitHubDirectoryScreen(repo: repo, client: client, downloads: downloads, path: (effectivePath as NSString).deletingLastPathComponent) }
             }
             if entries.count >= 1000 { Text("目录达到 API 1000 项上限，可能未显示全部文件。") }
+            if datedCount < entries.count {
+                Button(loadingDates ? "正在读取提交时间…" : "读取下一批提交时间（最多 20 项）") {
+                    Task { await loadDates() }
+                }.disabled(loadingDates || loading)
+                Text("每项需一次 GitHub API 请求，按需读取以节省账号限额。").font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(entries) { entry in
                 if entry.type == "dir" {
                     NavigationLink { GitHubDirectoryScreen(repo: repo, client: client, downloads: downloads, path: entry.path) } label: {
-                        Label(entry.name, systemImage: "folder")
+                        entryLabel(entry, symbol: "folder")
                     }
                 } else if entry.type == "file" {
-                    Button { Task { await download(entry) } } label: { Label(entry.name, systemImage: "arrow.down.doc") }
+                    Button { Task { await download(entry) } } label: { entryLabel(entry, symbol: "arrow.down.doc") }
                         .disabled(pending.contains(entry.path))
                 } else { Label(entry.name + "（不支持下载）", systemImage: "doc") }
             }
@@ -396,11 +472,36 @@ struct GitHubDirectoryScreen: View {
             .task(id: effectivePath + "|" + (repo.ref ?? "")) { await load() }.refreshable { await load() }
     }
     @MainActor private func load() async {
-        guard !loading else { return }
+        guard !loading, !loadingDates else { return }
         loading = true; message = nil
         defer { loading = false }
-        do { entries = try await client.contents(repo, path: effectivePath) }
+        do {
+            entries = try await client.contents(repo, path: effectivePath)
+            commitDates = [:]; datedCount = 0
+        }
         catch { if !Task.isCancelled { message = error.localizedDescription } }
+    }
+    private func entryLabel(_ entry: GitHubEntry, symbol: String) -> some View {
+        VStack(alignment: .leading) {
+            Label(entry.name, systemImage: symbol)
+            if let date = commitDates[entry.path] {
+                Text("最后提交：" + date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    @MainActor private func loadDates() async {
+        guard !loadingDates, !loading else { return }
+        loadingDates = true
+        defer { loadingDates = false }
+        let end = min(entries.count, datedCount + 20)
+        do {
+            while datedCount < end {
+                try Task.checkCancellation()
+                let entry = entries[datedCount]
+                commitDates[entry.path] = try await client.latestCommitDate(repo, path: entry.path)
+                datedCount += 1
+            }
+        } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
     @MainActor private func download(_ entry: GitHubEntry) async {
         guard pending.insert(entry.path).inserted else { return }
