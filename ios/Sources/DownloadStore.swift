@@ -206,7 +206,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             items[index].state = .failed
             // 不展示 NSError 描述，避免把带有凭证的完整请求 URL 显示或记录。
             items[index].error = "网络错误（\(error.domain)，\(error.code)），可重试"
-            if error.domain == NSURLErrorDomain && error.code == NSURLErrorCannotResume {
+            // 系统未提供可恢复数据时丢弃旧断点，下次重试从原始 URL 开始。
+            if error.userInfo[NSURLSessionDownloadTaskResumeData] == nil {
                 try? manager.removeItem(at: resumeURL(id))
             }
         }
