@@ -39,20 +39,23 @@ trap 'rm -rf -- "$test_dir"' EXIT
 xcrun simctl bootstatus "$simulator_id" -b
 # Apple's Xcode 16.4/iOS 18.5 simulator workaround; device deployment stays iOS 17.
 # https://developer.apple.com/forums/thread/785964
-if [ -f "$simulator_swift/libswiftWebKit.dylib" ]; then
-  python3 - "$simulator_swift" <<'PY'
+printf 'Simulator Swift runtime fallback: %s\n' "$simulator_swift"
+# A dylib can live only in dyld's shared cache, so do not gate this on -f.
+python3 - "$simulator_swift" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 path = "YunX.xcodeproj/xcshareddata/xcschemes/YunX.xcscheme"
 tree = ET.parse(path)
-action = tree.getroot().find("TestAction")
-variables = action.find("EnvironmentVariables")
-if variables is None:
-    variables = ET.SubElement(action, "EnvironmentVariables")
-ET.SubElement(variables, "EnvironmentVariable", key="DYLD_FALLBACK_LIBRARY_PATH", value=sys.argv[1], isEnabled="YES")
+for name in ("RunAction", "TestAction"):
+    action = tree.getroot().find(name)
+    if name == "TestAction":
+        action.set("shouldUseLaunchSchemeArgsEnv", "NO")
+    variables = action.find("EnvironmentVariables")
+    if variables is None:
+        variables = ET.SubElement(action, "EnvironmentVariables")
+    ET.SubElement(variables, "EnvironmentVariable", key="DYLD_FALLBACK_LIBRARY_PATH", value=sys.argv[1], isEnabled="YES")
 tree.write(path, encoding="UTF-8", xml_declaration=True)
 PY
-fi
 xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath "$test_dir/DerivedData" \

@@ -54,6 +54,17 @@ jobs:
         shell: bash
         run: echo "key=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
+      - name: Restore Go dependency and compiler cache
+        id: go-engine-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
+          restore-keys: |
+            go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-
+
       - name: Restore native iOS engine
         id: engine-cache
         uses: actions/cache/restore@v4
@@ -82,6 +93,15 @@ jobs:
             ios/build/YunX-Gopeed-corresponding-source.tar.gz
             ios/build/engine-source-revisions.txt
           key: yunx-engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
+
+      - name: Preserve Go cache before app checks
+        if: steps.engine-build.conclusion == 'success' && steps.go-engine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
 
       - name: Show generated proxy bridge declarations
         shell: bash

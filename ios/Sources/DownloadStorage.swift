@@ -24,7 +24,7 @@ enum DownloadStorage {
     private static var scopes: [URL] = []
     private static let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     private static let recordURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX/download-storage.json")
-    struct Target: Codable {
+    struct Target: Codable, Sendable {
         let bookmark: Data?
         let local: String?
         let folder: String
@@ -48,7 +48,7 @@ enum DownloadStorage {
         let data = try Data(contentsOf: recordURL)
         guard data.count <= 131072 else { throw DownloadStorageError.unavailable }
         let record = try JSONDecoder().decode(Record.self, from: data)
-        guard record.schema == 1 else { throw DownloadStorageError.unavailable }
+        guard record.schema == 1, (record.pending == nil) == (record.transaction == nil) else { throw DownloadStorageError.unavailable }
         return record
     }
     private static func save(_ record: Record) throws {
@@ -56,7 +56,8 @@ enum DownloadStorage {
         try JSONEncoder().encode(record).write(to: recordURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
     private static func resolve(_ target: Target) throws -> URL {
-        guard target.folder.range(of: #"^YunX-[A-Fa-f0-9-]{36}$"#, options: .regularExpression) != nil else { throw DownloadStorageError.unavailable }
+        guard target.folder.hasPrefix("YunX-"), target.folder.count == 41, UUID(uuidString: String(target.folder.dropFirst(5))) != nil,
+              (target.bookmark == nil) != (target.local == nil) else { throw DownloadStorageError.unavailable }
         let parent: URL
         if let bookmark = target.bookmark {
             var stale = false
@@ -109,6 +110,9 @@ enum DownloadStorage {
         try await Task.detached(priority: .utility) {
             try copyVerified(documents: documents, destination: destination)
         }.value
+        try commit(target, transaction: transaction)
+    }
+    private static func commit(_ target: Target, transaction: UUID) throws {
         // Persist intent before touching any alias. A crash resumes this short commit.
         lock.lock(); defer { lock.unlock() }
         var record = try load()

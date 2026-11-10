@@ -1,8 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import XCTest
+import WebKit
 @testable import YunX
 
 final class NetworkProxyTests: XCTestCase {
+    @MainActor
+    func testPublicWebKitProxyOverlayWorksOnSimulatorRuntime() throws {
+        var profile = NetworkProxyProfile(); profile.mode = .manual; profile.host = "proxy.invalid"
+        let store = WKWebsiteDataStore.nonPersistent()
+        store.proxyConfigurations = [try profile.configuration()]
+        XCTAssertEqual(store.proxyConfigurations.count, 1)
+        let native = URLSessionConfiguration.ephemeral
+        try NetworkProxy.configure(native, profile: profile)
+        XCTAssertEqual(native.proxyConfigurations.count, 1)
+        store.proxyConfigurations = []
+    }
     func testEndpointAndAuthenticationValidation() throws {
         var profile = NetworkProxyProfile(); profile.mode = .manual
         for host in ["https://proxy.test", "proxy.test:8080", "user@proxy.test", "proxy.test/path", "a\r\nb"] {
