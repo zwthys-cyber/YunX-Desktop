@@ -1,16 +1,20 @@
 #!/bin/bash
 # SPDX-License-Identifier: AGPL-3.0-only
-# 只供用户在自己的 Mac 上主动运行；不接入 GitHub Actions。
+# 用户授权在本地 Mac 或 GitHub Actions 的 macOS runner 构建。
 set -euo pipefail
-if [ "$(uname -s)" != Darwin ] || [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
-  echo "仅允许在本地 Mac 交互环境构建，不支持服务器或 CI。" >&2
+if [ "$(uname -s)" != Darwin ]; then
+  echo "需要 macOS 和完整 Xcode；不在当前代理服务器构建。" >&2
+  exit 1
+fi
+if [ -n "${CI:-}" ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
+  echo "仅允许本地 Mac 或已授权的 GitHub Actions 构建。" >&2
   exit 1
 fi
 cd -- "$(dirname -- "$0")"
-command -v xcodegen >/dev/null || { echo "请先在 Mac 安装 XcodeGen。" >&2; exit 1; }
+command -v xcodegen >/dev/null || { echo "请先安装 XcodeGen。" >&2; exit 1; }
 xcrun --find xcodebuild >/dev/null
 xcodegen generate
-build_dir="$(mktemp -d "${TMPDIR:-/tmp}/yunx-local.XXXXXXXX")"
+build_dir="$(mktemp -d "${TMPDIR:-/tmp}/yunx-build.XXXXXXXX")"
 trap 'rm -rf -- "$build_dir"' EXIT
 xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Release \
   -sdk iphoneos -destination 'generic/platform=iOS' \
@@ -18,12 +22,18 @@ xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Release \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 app="$build_dir/DerivedData/Build/Products/Release-iphoneos/YunX.app"
 test -d "$app" || { echo "找不到设备版 YunX.app" >&2; exit 1; }
+/usr/bin/codesign --force --sign - --timestamp=none \
+  --entitlements TrollStore.entitlements --generate-entitlement-der "$app"
+/usr/bin/codesign --verify --strict "$app"
+xcrun lipo -verify_arch arm64 "$app/YunX"
+/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$app/Info.plist"
 mkdir -p "$build_dir/package/Payload"
 ditto "$app" "$build_dir/package/Payload/YunX.app"
 mkdir -p build
-ipa="$PWD/build/YunX-iOS17-unsigned.ipa"
-# 删除旧产物，防止 zip 更新模式残留上次构建的文件。
+ipa="$PWD/build/YunX-iOS17-TrollStore-dev.ipa"
 rm -f -- "$ipa"
 (cd "$build_dir/package" && /usr/bin/zip -qry "$ipa" Payload)
-echo "未签名 IPA：$ipa"
-echo "此为移植中的开发版本。能否由 TrollStore 安装及运行，须在设备本地验证。"
+/usr/bin/unzip -tq "$ipa"
+shasum -a 256 "$ipa" > "$ipa.sha256"
+echo "开发版 IPA：$ipa"
+echo "编译和打包通过不代表已完成真机安装或全部功能移植。"

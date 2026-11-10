@@ -2,13 +2,13 @@
 
 目标：将桌面版完整的用户功能移植到 iOS 17.0，供已安装 TrollStore 的设备使用。
 
-**当前不是完整移植版，没有生成 IPA，也没有进行任何编译、测试或设备验证。** 当前提交仅为原生工程和基础下载、存储实现，不能替代桌面版。
+**当前不是完整移植版。** 当前提交仅为原生工程和基础下载、存储实现，不能替代桌面版。已配置 GitHub Actions 设备版编译与 IPA 打包，具体成功状态、产物和日志以对应 Actions 运行记录为准；未做真机安装与运行验证。
 
 ## 操作约束
 
-按仓库使用者要求，仅通过 GitHub 接口读取及修改源码。不在服务器下载、处理、验证或编译源码，不触发 GitHub Actions，也不新增云端构建。此分支不创建会触发上游 Windows 构建的 PR。此目录的构建脚本只供用户在自己的 Mac 上主动执行。
+按仓库使用者最新授权，仅通过 GitHub 接口读取及修改源码，允许 GitHub Actions 编译。不在当前代理服务器下载、处理、验证或编译源码。iOS 构建使用 GitHub 托管 macOS runner，不创建会触发上游 Windows 构建的 PR。也保留用户自行在本地 Mac 构建的方式。
 
-## 当前编写内容（全部未验证）
+## 当前编写内容（等待真机验证）
 
 - SwiftUI 原生页面，最低系统 iOS 17.0，iPhone / iPad。
 - URLSession 文件直链前台下载，暂停时保存系统断点数据，失败可重试；服务端不支持恢复时可能需要重新下载。
@@ -17,9 +17,17 @@
 - 不覆盖同名文件，删除任务记录保留已完成文件。
 - 系统默认网络安全策略仍生效，未为任意明文 HTTP 放开 ATS。
 
+## GitHub Actions 编译与下载
+
+修改 ios-port 分支下的 ios/ 源码或 iOS 工作流时自动构建。前往 [iOS 构建记录](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port)，打开成功运行，在 Artifacts 下载 YunX-iOS17-TrollStore-dev，解压取得 IPA 和 SHA-256 文件，然后将 IPA 分享给设备上的 TrollStore 安装。下载 Actions 产物通常需要登录 GitHub。
+
+若 Fork 的 Actions 被 GitHub 默认禁用，需要仓库所有者在 Actions 页面启用。构建使用 XcodeGen 生成工程，Xcode 编译 arm64 设备版，最低 iOS 17.0，再做 ad-hoc 签名和 IPA 打包。权限仅配置应用标识和本应用 Keychain 分组，不请求越狱、跨应用数据访问或后台常驻权限。
+
+工作流还检查签名结构、arm64 架构和 ZIP 完整性；这些检查不等于设备安装成功或下载/账号等业务功能通过测试。编译失败时查看运行日志和 YunX-iOS-build-log 产物。
+
 ## 本地 Mac 编译
 
-需要完整 Xcode、iOS SDK 和 XcodeGen；在 Mac 自行安装并选择 Xcode，完成首次启动配置。源码没有任何自动触发构建的工作流。
+需要完整 Xcode、iOS SDK 和 XcodeGen；在 Mac 自行安装并选择 Xcode，完成首次启动配置。也可使用同一构建脚本进行本地编译。
 
 在 Mac 下载本仓库的 ios-port 分支后：
 
@@ -28,13 +36,13 @@ cd ios
 bash build-local.sh
 ```
 
-脚本在本机生成 Xcode 工程并构建设备版，再打包为 build/YunX-iOS17-unsigned.ipa。也可先执行 xcodegen generate，在 Xcode 打开 YunX.xcodeproj 查看或编译。没有 Apple 开发证书的配置，不进行开发者签名。
+脚本生成 Xcode 工程并构建设备版，进行无需开发者证书的 ad-hoc 签名，再打包为 build/YunX-iOS17-TrollStore-dev.ipa。也可先执行 xcodegen generate，在 Xcode 打开 YunX.xcodeproj 查看或编译。
 
-**未签名 IPA 只是本地打包产物，不代表已通过 TrollStore 安装验证。** 本阶段不添加未经过确认的特殊 entitlement，也不承诺后台常驻、访问其他应用数据或绕过系统权限。
+**IPA 编译及打包通过不代表已通过 TrollStore 真机安装验证。** 本阶段仅使用应用标识和本应用 Keychain 权限，不承诺后台常驻、访问其他应用数据或绕过系统权限。
 
 ## 完整功能移植清单
 
-以 ../docs/FEATURES.md 为来源。以下均未完成，必须实现协议、页面、错误处理，再由用户本机编译及真机验证；不能仅凭页面或接口声明标记完成。
+以 ../docs/FEATURES.md 为来源。以下均未完成，必须实现协议、页面、错误处理，再进行编译及真机验证；不能仅凭页面或接口声明标记完成。
 
 | 功能组 | 尚需实现 |
 | --- | --- |

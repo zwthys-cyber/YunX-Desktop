@@ -144,11 +144,11 @@ struct PortStatusScreen: View {
         NavigationStack {
             List {
                 Section("当前状态") {
-                    Text("iOS 17 移植源码 · 未编译、未验证")
-                    Text("此分支尚未达到桌面版完整功能，当前没有发布 IPA。")
+                    Text("iOS 17 移植开发版 · 未做真机验证")
+                    Text("此分支尚未达到桌面版完整功能；编译记录与开发版 IPA 见 GitHub Actions。")
                         .foregroundStyle(.secondary)
                 }
-                Section("已编写，等待本机验证") {
+                Section("已编写，等待真机验证") {
                     Label("HTTP(S) 直链前台下载", systemImage: "doc")
                     Label("暂停、断点数据保存、重试", systemImage: "pause.circle")
                     Label("任务记录与文件导出", systemImage: "square.and.arrow.up")

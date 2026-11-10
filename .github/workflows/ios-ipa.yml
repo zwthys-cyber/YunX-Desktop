@@ -1,0 +1,86 @@
+name: iOS 17 IPA (development)
+
+on:
+  push:
+    branches: [ios-port]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-ipa.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build arm64 IPA for iOS 17
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - name: Checkout iOS sources
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ios
+            LICENSE
+
+      - name: Show Xcode and SDK versions
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Compile and package IPA
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ios/build
+          bash ios/build-local.sh 2>&1 | tee ios/build/build.log
+
+      - name: Upload IPA and checksum
+        id: ipa
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: YunX-iOS17-TrollStore-dev
+          path: |
+            ios/build/*.ipa
+            ios/build/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: YunX-iOS-build-log
+          path: ios/build/build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Summary
+        env:
+          ARTIFACT_URL: ${{ steps.ipa.outputs.artifact-url }}
+        run: |
+          {
+            echo '### YunX iOS 17 development IPA'
+            echo
+            echo "Download: $ARTIFACT_URL"
+            echo
+            echo 'arm64 device build; iOS 17.0 minimum; ad-hoc signed for TrollStore installation.'
+            echo 'Development port only: cloud-drive/video/P2P features remain unimplemented.'
+            echo 'Compilation/package checks do not verify installation or runtime on a real device.'
+          } >> "$GITHUB_STEP_SUMMARY"
