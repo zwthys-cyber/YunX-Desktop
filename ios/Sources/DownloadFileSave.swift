@@ -30,7 +30,7 @@ enum DownloadFileSave {
         catch {
             let failure = error as NSError
             // Permission/protection/provider errors must preserve the cache.
-            return (failure.domain == NSCocoaErrorDomain && [NSFileReadNoSuchFileError, NSFileNoSuchFileError].contains(failure.code)) ||
+            return (failure.domain == NSCocoaErrorDomain && [CocoaError.Code.fileReadNoSuchFile.rawValue, CocoaError.Code.fileNoSuchFile.rawValue].contains(failure.code)) ||
                 (failure.domain == NSPOSIXErrorDomain && failure.code == Int(ENOENT))
         }
     }

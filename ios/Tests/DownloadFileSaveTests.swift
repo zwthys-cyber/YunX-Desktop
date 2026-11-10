@@ -104,12 +104,15 @@ final class DownloadFileSaveTests: XCTestCase {
         var item = DownloadItem(id: id, url: URL(string: "https://expired.invalid/file")!, filename: "result.bin", state: .saving)
         item.pendingSave = true
         try JSONEncoder().encode([item]).write(to: cache.appendingPathComponent("tasks.json"))
-        let store = DownloadStore(root: root, cache: cache, configuration: .ephemeral)
-        XCTAssertEqual(store.items.first?.state, .failed)
-        XCTAssertNil(store.items.first?.pendingSave)
-        XCTAssertTrue(store.items.first?.error?.contains("重新解析") == true)
-        XCTAssertFalse(DownloadFileSave.pending(cache: cache, id: id))
-        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+        for _ in 0..<2 {
+            // A second launch before any index write must remain recoverable.
+            let store = DownloadStore(root: root, cache: cache, configuration: .ephemeral)
+            XCTAssertEqual(store.items.first?.state, .failed)
+            XCTAssertNil(store.items.first?.pendingSave)
+            XCTAssertTrue(store.items.first?.error?.contains("重新解析") == true)
+            XCTAssertFalse(DownloadFileSave.pending(cache: cache, id: id))
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+        }
     }
 
     @MainActor

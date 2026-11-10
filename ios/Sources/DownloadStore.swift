@@ -92,7 +92,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 }
                 for index in items.indices {
                     if items[index].state == .completed { DownloadFileSave.discard(cache: cache, id: items[index].id) }
-                    else if DownloadFileSave.pending(cache: cache, id: items[index].id) {
+                    else if items[index].pendingSave == true || DownloadFileSave.pending(cache: cache, id: items[index].id) {
                         if DownloadFileSave.bodyMissing(cache: cache, id: items[index].id) {
                             items[index].pendingSave = nil
                             items[index].state = .failed
