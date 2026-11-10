@@ -114,9 +114,9 @@ jobs:
             ~/Library/Caches/go-build
           key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-${{ github.run_id }}
 
-      - name: Show generated proxy bridge declarations
+      - name: Show generated native networking bridge declarations
         shell: bash
-        run: find ios/Frameworks/Yunxengine.xcframework -name '*.h' -exec grep -nE 'ProxyResolver|resolve:|SetProxyResolver' {} +
+        run: find ios/Frameworks/Yunxengine.xcframework -name '*.h' -exec grep -nE 'ProxyResolver|resolve:|SetProxyResolver|SetNativeHTTPBandwidthLimit' {} +
 
       - name: Install JDK for desktop backup interoperability fixtures
         uses: actions/setup-java@v4

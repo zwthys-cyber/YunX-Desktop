@@ -6,7 +6,7 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 最后完整成功的基线为 [`efbfc4c`](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/42813402244)：179 项模拟器测试零失败、独立 Java 对 iOS 加密备份的反向解密、主应用与分享扩展设备编译及 IPA 打包成功。
 
-该轮包含真实钥匙串访问、Swift/Go HTTP 代理、两套引擎共享任务配额、实际 HTTP 503 退避重试、目录迁移、GitHub 鉴权/ZIP/镜像策略及断点加密用例。模拟器使用 Xcode 标准签名；先前签名失败已修复。后续新增的引擎预读复制故障处理、取消和迁移时序修复仍需下一轮 [GitHub Actions](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port) 检查，不能直接继承旧提交的成功结论。
+该轮包含真实钥匙串访问、Swift/Go HTTP 代理、两套引擎共享任务配额、实际 HTTP 503 退避重试、目录迁移、GitHub 鉴权/ZIP/镜像策略及断点加密用例。模拟器使用 Xcode 标准签名；先前签名失败已修复。后续新增的引擎预读复制故障处理、原生 HTTP 文件共享限速、取消和迁移时序修复仍需下一轮 [GitHub Actions](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port) 检查，不能直接继承旧提交的成功结论。
 
 当前没有真实平台账号、iOS 17 设备安装或 TrollStore 共享容器验收记录。确定性的接口用例及较新 iOS 模拟器测试不能替代这些结果。早期失败与修复过程可查 Git 历史和 Actions，本页描述当前实现及其限制。
 
@@ -34,6 +34,7 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 - 普通文件使用 URLSession；符合策略的公开 HTTPS 文件可使用系统后台会话，鉴权请求及手动代理使用前台会话。已有后台任务在启动后重新关联，其他任务需手动继续。系统可能延迟或暂停后台传输，强制退出后需重新打开应用。
 - 原生 Gopeed 在进程内处理多连接 HTTPS、HLS、磁力、BT 种子和 ed2k；HTTP API、Web 和 MCP 服务关闭。HTTPS 支持 1–512 个连接，超过 32 个需确认，可提供预期整文件 SHA-256。P2P 支持 Tracker/DHT 设置及 peer 概览，实际公网和后台行为仍待设备验收。
+- 原生 HTTP 文件共享限速已写入，单位 KiB/s，0 表示不限；预算随设置变化及暂停取消唤醒，限速等待不计入网络无进度超时。尚待云端回归。此项只覆盖原生 HTTP 文件读取，普通 URLSession、HLS 及 P2P 不在范围内，不能视为已完成跨引擎全局限速。
 - 统一调度已接入 URLSession 与原生引擎的共享任务配额，包含启动后台恢复屏障、物理取消后释放配额及过期回调隔离；共享配额及真实传输用例已通过。瞬时网络故障和指定临时 HTTP 状态最多自动退避重试三次，不自动重试认证或证书错误。
 - 下载记录不保存账号请求头，跨源重定向移除 Cookie/Authorization。系统断点档案另用 AES-GCM 加密，密钥放入设备 Keychain；旧档案读取时迁移。任务身份参与校验，解密失败保留原文件。
 - 可编辑保存文件名、复制直链、暂停/继续/删除、预览和系统导出。失败任务置顶，同名文件不覆盖；删除记录保留已完成文件。
