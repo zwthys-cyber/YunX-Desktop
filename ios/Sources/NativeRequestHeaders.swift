@@ -29,7 +29,7 @@ final class NativeRequestHeaders: @unchecked Sendable {
         return url.scheme?.lowercased() == "http" && ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
     }
     static func validate(_ headers: [String: String]) throws {
-        let allowed: Set<String> = ["authorization", "cookie", "referer", "user-agent", "accept", "accept-language", "origin"]
+        let allowed: Set<String> = ["authorization", "cookie", "referer", "user-agent", "accept", "accept-language", "origin", "sec-ch-ua"]
         var seen = Set<String>(), size = 0
         for (key, value) in headers {
             guard allowed.contains(key.lowercased()), seen.insert(key.lowercased()).inserted,

@@ -6,7 +6,7 @@ final class NativeRequestHeadersTests: XCTestCase {
     func testContextSurvivesReloadAndRevokesAfterDeletion() throws {
         let service = "yunx.test-native-headers.\(UUID().uuidString)", id = UUID()
         let original = URL(string: "https://files.example.test/file?signature=fixture")!
-        let values = ["Cookie": "fixture-cookie=private", "Authorization": "Bearer fixture", "User-Agent": "YunX-Fixture"]
+        let values = ["Cookie": "fixture-cookie=private", "Authorization": "Bearer fixture", "User-Agent": "YunX-Fixture", "Sec-Ch-Ua": "fixture-browser-hint"]
         let store = NativeRequestHeaders(service: service)
         defer { store.delete(id) }
         try store.save(values, original: original, id: id)

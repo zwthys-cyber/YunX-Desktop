@@ -55,7 +55,7 @@ func YunxApplyRuntimeHeaders(id, originalURL string, request *http.Request) erro
     values, err := resolve(id, originalURL, request.URL.String())
     if err != nil { return errors.New("runtime credentials unavailable") }
     allowed := map[string]bool{"Authorization": true, "Cookie": true, "Referer": true, "User-Agent": true,
-        "Accept": true, "Accept-Language": true, "Origin": true}
+        "Accept": true, "Accept-Language": true, "Origin": true, "Sec-Ch-Ua": true}
     sanitized := http.Header{}
     seen := map[string]bool{}
     total := 0

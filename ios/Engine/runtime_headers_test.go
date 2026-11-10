@@ -14,18 +14,18 @@ func TestYunxRuntimeCredentialsStripAtCrossPortRedirect(t *testing.T) {
     YunxSetRuntimeHeaderResolver(func(_, _, _ string) (http.Header, error) {
         // Intentionally return the same credentials for every target: the Go
         // boundary independently enforces the origin restriction.
-        return http.Header{"Cookie": {"fixture-cookie=private"}, "Authorization": {"Bearer fixture-token"}}, nil
+        return http.Header{"Cookie": {"fixture-cookie=private"}, "Authorization": {"Bearer fixture-token"}, "Sec-Ch-Ua": {"fixture-browser-hint"}}, nil
     })
     defer YunxSetRuntimeHeaderResolver(nil)
     received := make(chan string, 1)
     target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        received <- r.Header.Get("Cookie") + "|" + r.Header.Get("Authorization")
+        received <- r.Header.Get("Cookie") + "|" + r.Header.Get("Authorization") + "|" + r.Header.Get("Sec-Ch-Ua")
         _, _ = w.Write([]byte("download"))
     }))
     defer target.Close()
     var originalAuthenticated atomic.Bool
     origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        originalAuthenticated.Store(r.Header.Get("Cookie") == "fixture-cookie=private" && r.Header.Get("Authorization") == "Bearer fixture-token")
+        originalAuthenticated.Store(r.Header.Get("Cookie") == "fixture-cookie=private" && r.Header.Get("Authorization") == "Bearer fixture-token" && r.Header.Get("Sec-Ch-Ua") == "fixture-browser-hint")
         w.Header().Set("Set-Cookie", "server-session=do-not-forward; Path=/")
         http.Redirect(w, r, target.URL, http.StatusFound)
     }))
@@ -40,7 +40,7 @@ func TestYunxRuntimeCredentialsStripAtCrossPortRedirect(t *testing.T) {
     defer response.Body.Close()
     _, _ = io.Copy(io.Discard, response.Body)
     if !originalAuthenticated.Load() { t.Fatal("original request did not receive its credentials") }
-    if got := <-received; got != "|" { t.Fatal("credentials crossed a redirect origin") }
+    if got := <-received; got != "||fixture-browser-hint" { t.Fatal("credentials crossed an origin or the safe UC client hint was lost") }
 }
 
 func TestYunxRuntimeCredentialsSurviveSameOriginRedirect(t *testing.T) {
