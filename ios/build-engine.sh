@@ -22,8 +22,10 @@ cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
 go get "golang.org/x/mobile/bind@$MOBILE_REV"
+# The pinned mobile tool changes the module graph; finalize all checksums before tests/vendor.
+go mod tidy
 # These upstream end-to-end tests use local httptest servers, not live platforms.
-go test -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
+go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
 gomobile init
 gomobile bind -target=ios/arm64,iossimulator/arm64 -iosversion=17.0 -tags=nosqlite \
   -ldflags='-w -s' -o "$engine_root/Frameworks/Yunxengine.xcframework" ./bind/yunxengine

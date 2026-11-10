@@ -65,6 +65,7 @@ jobs:
           key: yunx-engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
 
       - name: Build native Gopeed XCFramework
+        id: engine-build
         if: steps.engine-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
@@ -115,7 +116,7 @@ jobs:
           compression-level: 0
 
       - name: Upload engine corresponding source
-        if: always()
+        if: always() && (steps.engine-cache.outputs.cache-hit == 'true' || steps.engine-build.outcome == 'success')
         uses: actions/upload-artifact@v7.0.2
         with:
           name: YunX-Gopeed-corresponding-source
