@@ -20,6 +20,10 @@ struct CloudHomeScreen: View {
     @State private var passcode = ""
     @State private var error: String?
     @State private var route: CloudRoute?
+    @State private var confirmingCommand = false
+    @State private var resolvingCommand = false
+    @State private var pendingCommand = ""
+    @State private var pendingPasscode = ""
 
     private var accounts: [SavedCredential] { vault.accounts.filter { $0.platform == provider.rawValue } }
     private var selected: SavedCredential? { accounts.first { $0.id == accountID } }
@@ -48,22 +52,12 @@ struct CloudHomeScreen: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     LibraryPicker(platform: provider.rawValue) { input = $0; passcode = "" }
                     Button("解析并浏览") {
-                        do {
-                            let share = try CloudShare.parse(input, override: passcode)
-                            guard share.provider == provider else {
-                                error = "这是\(share.provider.rawValue)链接，请先切换平台再解析。"
-                                return
-                            }
-                            error = nil
-                            var canonical = URLComponents()
-                            canonical.scheme = "https"; canonical.host = share.sourceURL?.host ?? share.provider.webHost
-                            canonical.path = share.provider == .c139 ? "/shareweb/" : (share.provider == .lanzou ? "/" + share.shareID : "/s/" + share.shareID)
-                            if share.provider == .c139 { canonical.fragment = "/w/i/" + share.shareID }
-                            if !share.passcode.isEmpty { canonical.queryItems = [URLQueryItem(name: "pwd", value: share.passcode)] }
-                            if let url = canonical.url { library.record(platform: provider.rawValue, text: url.absoluteString) }
-                            route = CloudRoute(provider: provider, account: selected, share: share)
-                        } catch { self.error = error.localizedDescription }
-                    }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        if let share = try? CloudShare.parse(input, override: passcode) { open(share) }
+                        else if CloudCommandClient.candidate(input) {
+                            pendingCommand = input; pendingPasscode = passcode; confirmingCommand = true
+                        } else { error = "未识别到分享链接或中文口令。" }
+                    }.disabled(resolvingCommand || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if resolvingCommand { ProgressView("正在解析口令") }
                 }
                 Section("个人网盘") {
                     Button("浏览我的文件") {
@@ -72,10 +66,16 @@ struct CloudHomeScreen: View {
                 }
                 if let error { Section("提示") { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Text("当前接入夸克、UC、123、光鸭、蓝奏优享和迅雷。支持目录及长按文件管理、个人盘递归批量下载（最多 500 文件/100 目录）；迅雷分享先转存，再从个人盘下载。其他平台仍在移植。")
+                    Text("接入十种网盘。支持目录及长按文件管理、个人盘递归批量下载（最多 500 文件/100 目录）；百度和迅雷分享先显式转存，再从个人盘下载。蓝奏个人盘取链需确认生成分享。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
+                .confirmationDialog("将口令发送到解析服务？", isPresented: $confirmingCommand, titleVisibility: .visible) {
+                    Button("发送并解析") { Task { await resolveCommand() } }
+                    Button("取消", role: .cancel) { pendingCommand = ""; pendingPasscode = "" }
+                } message: {
+                    Text("先尝试迅雷；无结果时将口令及手填提取码发送至第三方星海服务。仅发送本次文本，不发送网盘账号凭据。服务可能记录文本。")
+                }
                 .onReceive(navigation.$cloudInput.compactMap { $0 }) { value in
                     input = value; passcode = ""; error = nil
                     if let share = try? CloudShare.parse(value) { provider = share.provider }
@@ -86,6 +86,30 @@ struct CloudHomeScreen: View {
                     CloudBrowserScreen(route: item, vault: vault, downloads: downloads)
                 }
         }
+    }
+    private func resolveCommand() async {
+        guard !resolvingCommand else { return }
+        let command = pendingCommand, code = pendingPasscode
+        pendingCommand = ""; pendingPasscode = ""; resolvingCommand = true
+        defer { resolvingCommand = false }
+        do {
+            let share = try await CloudCommandClient().resolve(command, passcode: code)
+            try Task.checkCancellation()
+            provider = share.provider
+            accountID = vault.accounts.first { $0.platform == share.provider.rawValue && $0.isPrimary == true }?.id
+            open(share)
+        } catch { self.error = "口令解析失败。请检查网络、稍后重试或粘贴原始分享链接。" }
+    }
+    private func open(_ share: CloudShare) {
+        guard share.provider == provider else { error = "这是\(share.provider.rawValue)链接，请先切换平台再解析。"; return }
+        error = nil
+        var canonical = URLComponents()
+        canonical.scheme = "https"; canonical.host = share.sourceURL?.host ?? share.provider.webHost
+        canonical.path = share.provider == .c139 ? "/shareweb/" : (share.provider == .lanzou ? "/" + share.shareID : "/s/" + share.shareID)
+        if share.provider == .c139 { canonical.fragment = "/w/i/" + share.shareID }
+        if !share.passcode.isEmpty { canonical.queryItems = [URLQueryItem(name: "pwd", value: share.passcode)] }
+        if let url = canonical.url { library.record(platform: provider.rawValue, text: url.absoluteString) }
+        route = CloudRoute(provider: provider, account: selected, share: share)
     }
 }
 

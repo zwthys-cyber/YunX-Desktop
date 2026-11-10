@@ -18,7 +18,7 @@ struct DownloadItem: Codable, Identifiable {
         }
     }
     let id: UUID
-    let url: URL
+    var url: URL
     var filename: String
     var state: State
     var received: Int64 = 0
@@ -30,6 +30,7 @@ struct DownloadItem: Codable, Identifiable {
     var sha256: String?
     var expectedMedia: String?
     var backgroundTransfer: Bool?
+    var originFallback: URL?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -107,14 +108,18 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     @discardableResult
     func add(_ url: URL, filename: String? = nil, headers: [String: String] = [:],
-             expectedSize: Int64? = nil, expectedMedia: String? = nil) -> Bool {
+             expectedSize: Int64? = nil, expectedMedia: String? = nil, originFallback: URL? = nil) -> Bool {
         guard !unreadableIndex else { return false }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil, url.user == nil, url.password == nil else {
             storageError = "只接受不含账号密码的 HTTP 或 HTTPS 文件直链"
             return false
         }
         let name = safeName(filename ?? url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
+        if let originFallback, (!headers.isEmpty || !GitHubMirrorPolicy.publicOrigin(originFallback) || url.scheme != "https") {
+            storageError = "仅无认证的公开 GitHub 下载允许镜像回退。"; return false
+        }
         var item = DownloadItem(id: UUID(), url: url, filename: name, state: .waiting)
+        item.originFallback = originFallback
         item.requiresHeaders = !headers.isEmpty
         item.preserveFilename = filename != nil
         item.requiredSize = expectedSize
@@ -344,6 +349,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(downloadTask) { return }
         guard let response = downloadTask.response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
+            if queueOriginFallback(index) { return }
             let status = (downloadTask.response as? HTTPURLResponse)?.statusCode
             Task { await Diagnostics.shared.record(.downloadFailed, code: status) }
             items[index].state = .failed
@@ -355,6 +361,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             if let expected = items[index].requiredSize, expected > 0 {
                 let actual = try location.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                 guard Int64(actual) == expected else {
+                    if queueOriginFallback(index) { return }
                     throw CloudError.message("返回文件大小与平台记录不一致，已拒绝保存。")
                 }
             }
@@ -393,6 +400,20 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
     }
 
+    @discardableResult
+    private func queueOriginFallback(_ index: Int) -> Bool {
+        guard let origin = items[index].originFallback, items[index].requiresHeaders != true,
+              GitHubMirrorPolicy.publicOrigin(origin) else { return false }
+        let previous = items[index]
+        items[index].url = origin; items[index].originFallback = nil
+        items[index].received = 0; items[index].expected = 0; items[index].state = .waiting
+        items[index].error = nil
+        // A mirror resume archive can contain its request URL and incompatible bytes.
+        try? manager.removeItem(at: resumeURL(previous.id))
+        guard save() else { items[index] = previous; return false }
+        return true
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,
@@ -424,12 +445,14 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
         if items[index].state == .completed { save(); return }
         if items[index].state == .pausing { return }
+        if items[index].state == .waiting { return }
         if items[index].state == .paused, let cancellation = error as NSError?,
            cancellation.domain == NSURLErrorDomain, cancellation.code == NSURLErrorCancelled {
             writeResume(cancellation.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, id: id)
             save(); return
         }
         if let error = error as NSError? {
+            if error.code != NSURLErrorCancelled, queueOriginFallback(index) { return }
             let code = error.code
             Task { await Diagnostics.shared.record(.downloadFailed, code: code) }
             writeResume(error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, id: id)

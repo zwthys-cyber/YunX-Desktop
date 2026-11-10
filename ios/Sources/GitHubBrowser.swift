@@ -361,7 +361,8 @@ struct GitHubDirectoryScreen: View {
         defer { pending.remove(entry.path) }
         do {
             let plan = try await client.fileDownload(repo, path: entry.path)
-            message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size) ? "已加入下载：" + plan.filename : downloads.storageError
+            let routed = try await GitHubMirrorSelector.shared.plan(plan)
+            message = downloads.add(routed.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size, originFallback: routed.origin) ? "已加入下载：" + plan.filename : downloads.storageError
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
 }
@@ -391,7 +392,8 @@ struct GitHubFileScreen: View {
         busy = true; defer { busy = false }
         do {
             let plan = try await client.fileDownload(repo, path: path)
-            message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size) ? "已加入下载。" : downloads.storageError
+            let routed = try await GitHubMirrorSelector.shared.plan(plan)
+            message = downloads.add(routed.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size, originFallback: routed.origin) ? "已加入下载。" : downloads.storageError
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
 }
@@ -479,10 +481,13 @@ struct GitHubReleasesScreen: View {
                     if let body = release.body { Text(body).textSelection(.enabled) }
                     ForEach(release.assets) { asset in
                         Button {
-                            do {
-                                let plan = try client.releaseDownload(repo, asset: asset)
-                                message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size) ? "已加入下载：" + asset.name : downloads.storageError
-                            } catch { message = error.localizedDescription }
+                            Task {
+                                do {
+                                    let plan = try client.releaseDownload(repo, asset: asset)
+                                    let routed = try await GitHubMirrorSelector.shared.plan(plan)
+                                    message = downloads.add(routed.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size, originFallback: routed.origin) ? "已加入下载：" + asset.name : downloads.storageError
+                                } catch { message = error.localizedDescription }
+                            }
                         } label: { Label(asset.name, systemImage: "arrow.down.circle") }
                     }
                 }

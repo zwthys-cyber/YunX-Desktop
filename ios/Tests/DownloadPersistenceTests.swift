@@ -2,12 +2,39 @@
 import XCTest
 @testable import YunX
 
+private final class HeldDownloadProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { }
+    override func stopLoading() { }
+}
+
 @MainActor
 final class DownloadPersistenceTests: XCTestCase {
     private func configuration() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CloudMockProtocol.self]
         return config
+    }
+    func testDifferentSessionTaskCannotOverwriteCurrentDownload() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [HeldDownloadProtocol.self]
+        let store = DownloadStore(root: folder.appendingPathComponent("Downloads"), cache: folder.appendingPathComponent("Support"), configuration: config)
+        XCTAssertTrue(store.add(URL(string: "https://example.invalid/fixture.bin")!))
+        let item = try XCTUnwrap(store.items.first)
+        defer { store.delete(item.id) }
+        let other = URLSession(configuration: config)
+        defer { other.invalidateAndCancel() }
+        let stale = other.downloadTask(with: item.url)
+        stale.taskDescription = item.id.uuidString
+        // Each session begins its task identifiers at 1; object identity must win.
+        XCTAssertEqual(stale.taskIdentifier, 1)
+        store.urlSession(other, downloadTask: stale, didWriteData: 999, totalBytesWritten: 999, totalBytesExpectedToWrite: 1000)
+        store.urlSession(other, task: stale, didCompleteWithError: URLError(.timedOut))
+        XCTAssertEqual(store.items.first?.state, .downloading)
+        XCTAssertEqual(store.items.first?.received, 0)
     }
     func testUnreadableIndexIsPreservedAndCannotBeOverwrittenByNewTask() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

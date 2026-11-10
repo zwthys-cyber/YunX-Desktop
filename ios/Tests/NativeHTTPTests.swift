@@ -4,16 +4,18 @@ import CryptoKit
 import Darwin
 @testable import YunX
 
-private final class NativeHTTPFixture {
+final class NativeHTTPFixture {
     private let listener: Int32
     private let data: Data
+    private let observer: (@Sendable (String) -> Void)?
     private let lock = NSLock()
     private var stopped = false
     private var starts: [Int] = []
     private var clients = Set<Int32>()
     private let port: UInt16
-    init(data: Data) throws {
+    init(data: Data, observer: (@Sendable (String) -> Void)? = nil) throws {
         self.data = data
+        self.observer = observer
         let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard socket >= 0 else { throw CloudError.message("Fixture socket failed") }
         var address = sockaddr_in()
@@ -64,6 +66,7 @@ private final class NativeHTTPFixture {
             guard input.count <= 16_384 else { return }
         }
         let text = String(decoding: input, as: UTF8.self)
+        observer?(text)
         var start = 0
         var end = data.count - 1
         var partial = false
