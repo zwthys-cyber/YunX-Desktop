@@ -232,11 +232,19 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
         let usesBackground = backgroundSession != nil && BackgroundDownloadPolicy.allows(items[index].url, headers: headers)
         let targetSession = usesBackground ? backgroundSession! : session!
+        let resume: Data?
+        do { resume = try DownloadResumeVault.shared.read(from: resumeURL(id), id: id) }
+        catch {
+            items[index].state = .failed
+            items[index].error = error.localizedDescription
+            save()
+            return
+        }
         let slot = id.uuidString + "." + UUID().uuidString
         guard YunxengineAcquireHTTPTask(slot, false) else { return }
         transferSlots[id] = slot
         let task: URLSessionDownloadTask
-        if let resume = try? Data(contentsOf: resumeURL(id)) {
+        if let resume {
             task = targetSession.downloadTask(withResumeData: resume)
         } else {
             task = targetSession.downloadTask(with: request)
@@ -383,8 +391,13 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     private func writeResume(_ data: Data?, id: UUID) {
         guard let data else { return }
-        do { try data.write(to: resumeURL(id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
-        catch { storageError = "无法保存断点：\(error.localizedDescription)" }
+        do { try DownloadResumeVault.shared.write(data, to: resumeURL(id), id: id) }
+        catch {
+            storageError = "无法安全保存下载断点，原断点已保留。"
+            if let index = items.firstIndex(where: { $0.id == id }) {
+                items[index].error = "断点未能安全保存；继续时可能从旧断点或文件开头重新下载。"
+            }
+        }
     }
 
     @discardableResult private func save() -> Bool {
