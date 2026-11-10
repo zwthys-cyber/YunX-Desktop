@@ -3,13 +3,17 @@ package httpclient
 
 import (
     "crypto/tls"
+    "crypto/x509"
+    "errors"
     "fmt"
     "io"
+    "log"
     "net/http"
     "net/http/httptest"
     "sync"
     "sync/atomic"
     "testing"
+    "time"
 )
 
 func TestYunxHTTPVersionReachesNativeAndBrowserTLSConnections(t *testing.T) {
@@ -63,4 +67,38 @@ func TestYunxHTTPVersionReachesNativeAndBrowserTLSConnections(t *testing.T) {
       }
     }
     if fallbackProbes.Load() != 6 { t.Fatalf("native-to-browser fallback was not exercised: %d", fallbackProbes.Load()) }
+}
+
+func TestYunxHTTPVersionPreservesTLSCertificateVerification(t *testing.T) {
+    server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, r.Proto) }))
+    server.EnableHTTP2 = true
+    server.Config.ErrorLog = log.New(io.Discard, "", 0)
+    server.StartTLS()
+    defer server.Close()
+    trusted := x509.NewCertPool()
+    trusted.AddCert(server.Certificate())
+    for _, browser := range []Browser{BrowserChrome, BrowserFirefox, BrowserSafari} {
+        for _, enabled := range []bool{false, true} {
+            for _, roots := range []*x509.CertPool{nil, trusted} {
+                client, err := NewClient(Options{
+                    Transport: TransportOptions{YunxDisableHTTP2: !enabled, TLSClientConfig: &tls.Config{RootCAs: roots}},
+                    Impersonation: ImpersonationOptions{Mode: ImpersonationFixed, Browser: browser},
+                    Client: ClientOptions{Timeout: 5*time.Second},
+                })
+                if err != nil { t.Fatal(err) }
+                response, err := client.Get(server.URL)
+                if roots == nil {
+                    if response != nil { response.Body.Close() }
+                    var unknown x509.UnknownAuthorityError
+                    if !errors.As(err, &unknown) { t.Fatalf("%s enabled=%v accepted an untrusted certificate or returned a different error: %v", browser, enabled, err) }
+                } else {
+                    if err != nil { t.Fatalf("%s enabled=%v rejected trusted local CA: %v", browser, enabled, err) }
+                    _, readErr := io.Copy(io.Discard, response.Body)
+                    response.Body.Close()
+                    if readErr != nil { t.Fatal(readErr) }
+                }
+                client.CloseIdleConnections()
+            }
+        }
+    }
 }
