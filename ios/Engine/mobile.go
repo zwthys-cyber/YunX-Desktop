@@ -69,6 +69,15 @@ func Invoke(method, path, query, body string) string {
 
 func Stop() { rest.Stop() }
 
+// Migration must observe close failures rather than relying on log-only Stop.
+func StopForStorage() error {
+    var closeErr error
+    if rest.Downloader != nil { closeErr = rest.Downloader.Close() }
+    rest.Stop()
+    if closeErr != nil { return errors.New("engine files could not be closed safely") }
+    return nil
+}
+
 func ServerRunning() bool {
     state, err := rest.GetAPIServerState()
     return err == nil && state != nil && state.Running

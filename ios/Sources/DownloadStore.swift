@@ -71,6 +71,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         self.root = root; self.cache = cache
         super.init()
         do {
+            if backgroundEnabled { try DownloadStorage.prepare() }
             let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
             try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: protection)
             try manager.createDirectory(at: cache, withIntermediateDirectories: true, attributes: protection)
@@ -113,6 +114,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     func add(_ url: URL, filename: String? = nil, headers: [String: String] = [:],
              expectedSize: Int64? = nil, expectedMedia: String? = nil, originFallback: URL? = nil) -> Bool {
         guard !unreadableIndex else { return false }
+        guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil, url.user == nil, url.password == nil else {
             storageError = "只接受不含账号密码的 HTTP 或 HTTPS 文件直链"
             return false
@@ -145,6 +147,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func start(_ id: UUID) {
+        guard !DownloadStorage.isMigrating else { return }
         guard !unreadableIndex, active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               [.waiting, .paused, .failed].contains(items[index].state) else { return }
         let previous = items[index]
@@ -156,7 +159,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     private func drainQueue() {
-        guard !unreadableIndex, !restoringBackground else { return }
+        guard !unreadableIndex, !restoringBackground, !DownloadStorage.isMigrating else { return }
         retryWake?.cancel(); retryWake = nil
         let now = Date()
         for id in items.reversed().filter({ $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }).map(\.id) {
@@ -184,6 +187,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func resumeAll() {
+        guard !DownloadStorage.isMigrating else { return }
         guard !unreadableIndex else { return }
         let previous = items
         for index in items.indices where [.paused, .failed].contains(items[index].state) {
@@ -196,6 +200,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     private func launch(_ id: UUID) {
+        guard !DownloadStorage.isMigrating else { return }
         guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               items[index].state != .completed, items[index].state != .pausing else { return }
         guard NetworkProxy.ready else { items[index].state = .failed; items[index].error = "代理设置不可用，请到设置中修复后重试。"; save(); return }
@@ -282,6 +287,20 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 self.drainQueue()
             }
         }
+    }
+
+    func quiesceForStorage() async throws {
+        let deadline = Date().addingTimeInterval(60)
+        while restoringBackground {
+            guard Date() < deadline else { throw DownloadStorageError.busy }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        pauseAll()
+        while !active.isEmpty {
+            guard Date() < deadline else { throw DownloadStorageError.busy }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard storageError == nil else { throw DownloadStorageError.unavailable }
     }
 
     func delete(_ id: UUID) {

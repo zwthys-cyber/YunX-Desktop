@@ -2,15 +2,16 @@
 import Foundation
 
 /// Sends only the explicitly confirmed command. Never receives account cookies.
-final class CloudCommandClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    private var injected: URLSession?
-    private lazy var session: URLSession = {
+final class CloudCommandClient: @unchecked Sendable {
+    private let session: URLSession
+    init(session: URLSession? = nil) {
+        if let session { self.session = session; return }
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 20
-        return NetworkProxy.session(configuration: config, delegate: self, delegateQueue: nil)
-    }()
-    init(session: URLSession? = nil) { injected = session; super.init() }
+        self.session = NetworkProxy.session(configuration: config, delegate: CloudCommandRedirectPolicy(), delegateQueue: nil)
+    }
+    deinit { session.invalidateAndCancel() }
     static func candidate(_ text: String) -> Bool {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return !value.isEmpty && value.utf16.count <= 120 && !value.lowercased().contains("http:") && !value.lowercased().contains("https:") && value.unicodeScalars.contains { (0x4e00...0x9fff).contains($0.value) }
@@ -53,7 +54,7 @@ final class CloudCommandClient: NSObject, URLSessionTaskDelegate, @unchecked Sen
         return try CloudShare.parse("https://\(platform == "uc" ? "drive.uc.cn" : "pan.quark.cn")/s/\(id)", override: passcode)
     }
     private func json(_ request: URLRequest) async throws -> [String: Any] {
-        let (bytes, response) = try await (injected ?? session).bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw CloudError.message("口令服务暂不可用，请稍后重试。") }
         var data = Data()
         for try await byte in bytes {
@@ -63,6 +64,9 @@ final class CloudCommandClient: NSObject, URLSessionTaskDelegate, @unchecked Sen
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw CloudError.message("口令服务返回无效结果。") }
         return object
     }
+}
+
+private final class CloudCommandRedirectPolicy: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
     }

@@ -124,6 +124,7 @@ struct SettingsScreen: View {
                 Button("恢复默认强调色") { accent = ThemeColor.initial }
             }
             Section("下载") {
+                NavigationLink("数据与存储") { DownloadStorageScreen(downloads: downloads) }
                 NavigationLink("网络代理") { NetworkProxyScreen(downloads: downloads) }
                 NavigationLink("GitHub 下载镜像") { GitHubMirrorScreen() }
                 NavigationLink("完成通知") { DownloadNotificationSettings() }

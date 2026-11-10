@@ -43,6 +43,7 @@ final class MediaAssemblyStore: ObservableObject {
         index = support.appendingPathComponent("YunX/assemblies.json")
         root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MediaMerged", isDirectory: true)
         do {
+            try DownloadStorage.prepare()
             if FileManager.default.fileExists(atPath: index.path) {
                 jobs = try JSONDecoder().decode([AssemblyJob].self, from: Data(contentsOf: index))
                 for i in jobs.indices where [.preparing, .downloading, .merging, .pausing].contains(jobs[i].state) { jobs[i].state = .paused }
@@ -51,6 +52,7 @@ final class MediaAssemblyStore: ObservableObject {
     }
     @discardableResult
     func add(_ asset: MediaAsset) -> Bool {
+        guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard !unreadable, let audio = asset.audioURL else { return false }
         do {
             _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers)
@@ -63,6 +65,7 @@ final class MediaAssemblyStore: ObservableObject {
         return true
     }
     func resume(_ id: UUID) {
+        guard !DownloadStorage.isMigrating else { return }
         guard actions[id] == nil, let position = jobs.firstIndex(where: { $0.id == id }), jobs[position].state != .completed || output(jobs[position]) == nil else { return }
         jobs[position].state = .preparing; jobs[position].error = nil
         guard save() else { jobs[position].state = .failed; jobs[position].error = storageError; return }
@@ -70,6 +73,7 @@ final class MediaAssemblyStore: ObservableObject {
     }
     @discardableResult
     func addSequence(_ assets: [MediaAsset], filename: String) -> Bool {
+        guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard !unreadable, (2...200).contains(assets.count), let first = assets.first,
               assets.allSatisfy({ $0.kind == .video && !$0.isHLS && $0.audioURL == nil && $0.headers == first.headers }) else { storageError = "只支持 2–200 个相同请求上下文的单文件视频片段。"; return false }
         do { for asset in assets { _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers) } }
@@ -87,6 +91,7 @@ final class MediaAssemblyStore: ObservableObject {
     }
     @discardableResult
     func addLivePhoto(_ asset: MediaAsset) -> Bool {
+        guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard !unreadable, asset.kind == .image, let movie = asset.livePhotoVideoURL else { return false }
         do {
             _ = try NativeHTTPSRequest(text: asset.url.absoluteString, headers: asset.headers)
@@ -105,6 +110,14 @@ final class MediaAssemblyStore: ObservableObject {
         guard save() else { jobs = previous; return }
         actions[id]?.cancel()
         Task { for track in tracks { _ = try? await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/" + track, query: "force=false") } }
+    }
+    func quiesceForStorage() async throws {
+        for job in jobs where job.state != .completed { pause(job.id) }
+        let deadline = Date().addingTimeInterval(60)
+        while !actions.isEmpty {
+            guard Date() < deadline else { throw DownloadStorageError.busy }
+            try await Task.sleep(for: .milliseconds(100))
+        }
     }
     func output(_ job: AssemblyJob) -> URL? {
         guard job.state == .completed else { return nil }

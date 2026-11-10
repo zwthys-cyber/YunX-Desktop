@@ -39,6 +39,7 @@ actor NativeEngine {
     static let shared = NativeEngine()
     private var startup: Task<Void, Error>?
     private var proxyResolver: IOSProxyResolver?
+    private var activeOperations = 0
     private var watchedCompletions = Set<String>()
     private var completionMonitor: Task<Void, Never>?
     private let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX/Engine", isDirectory: true)
@@ -46,6 +47,7 @@ actor NativeEngine {
 
     func ensureStarted() async throws {
         if let startup { return try await startup.value }
+        guard !DownloadStorage.isMigrating else { throw DownloadStorageError.busy }
         _ = try NetworkProxy.current()
         let resolver = IOSProxyResolver()
         proxyResolver = resolver
@@ -53,6 +55,7 @@ actor NativeEngine {
         let destination = downloads
         let dht = UserDefaults.standard.bool(forKey: "engineDHT")
         let operation = Task.detached(priority: .utility) {
+            try DownloadStorage.prepare()
             try Self.bindProxy(resolver)
             for folder in [root, destination] {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
@@ -89,7 +92,11 @@ actor NativeEngine {
         proxyResolver = resolver
     }
     func invoke(_ method: String, path: String, query: String = "", body: Data? = nil) async throws -> Data {
+        guard !DownloadStorage.isMigrating || path.hasSuffix("/pause") else { throw DownloadStorageError.busy }
         try await ensureStarted()
+        guard !DownloadStorage.isMigrating || path.hasSuffix("/pause") else { throw DownloadStorageError.busy }
+        activeOperations += 1
+        defer { activeOperations -= 1 }
         let encoded = body.flatMap { String(data: $0, encoding: .utf8) } ?? ""
         let data = try await Task.detached(priority: .utility) {
             let response = YunxengineInvoke(method, path, query, encoded)
@@ -110,6 +117,22 @@ actor NativeEngine {
             beginCompletionWatch()
         }
         return data
+    }
+    func quiesceForStorage() async throws {
+        completionMonitor?.cancel(); completionMonitor = nil
+        let deadline = Date().addingTimeInterval(60)
+        while activeOperations > 0 {
+            guard Date() < deadline else { throw DownloadStorageError.busy }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard let startup else { return }
+        try await startup.value
+        let closed = await Task.detached(priority: .utility) {
+            var error: NSError?
+            return YunxengineStopForStorage(&error)
+        }.value
+        self.startup = nil; proxyResolver = nil
+        guard closed else { DownloadStorage.failClosed(); throw DownloadStorageError.unavailable }
     }
     func watchCurrentCompletions() async {
         guard startup != nil, UserDefaults.standard.bool(forKey: DownloadNotifications.preferenceKey), let current = try? await tasks() else { return }

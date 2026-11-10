@@ -15,21 +15,49 @@ java Fixtures/Pan115Fixture.java > Tests/pan115-vectors.json
 java Fixtures/LanzouFixture.java > Tests/lanzou-vectors.json
 xcodegen generate
 mkdir -p build
-simulator_id="$(xcrun simctl list devices available --json | python3 -c '
-import json, sys
-devices = json.load(sys.stdin)["devices"]
-ids = [device["udid"] for runtime, group in devices.items() if "iOS" in runtime
-       for device in group if device.get("isAvailable") and device["name"].startswith("iPhone")]
-print(ids[0] if ids else "")
-')"
+simulator_info="$(python3 - <<'PY'
+import json, subprocess
+devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "--json"]))["devices"]
+runtimes = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]
+for runtime, group in devices.items():
+    if "iOS" not in runtime:
+        continue
+    for device in group:
+        if device.get("isAvailable") and device["name"].startswith("iPhone"):
+            bundle = next(item["bundlePath"] for item in runtimes if item["identifier"] == runtime)
+            print(device["udid"])
+            print(bundle + "/Contents/Resources/RuntimeRoot/System/Cryptexes/OS/usr/lib/swift")
+            raise SystemExit(0)
+raise SystemExit("No available iPhone runtime")
+PY
+)"
+simulator_id="${simulator_info%%$'\n'*}"
+simulator_swift="${simulator_info#*$'\n'}"
 test -n "$simulator_id" || { echo "找不到可用的 iPhone 模拟器。" >&2; exit 1; }
 test_dir="$(mktemp -d -t yunx-tests)"
 trap 'rm -rf -- "$test_dir"' EXIT
 xcrun simctl bootstatus "$simulator_id" -b
+# Apple's Xcode 16.4/iOS 18.5 simulator workaround; device deployment stays iOS 17.
+# https://developer.apple.com/forums/thread/785964
+if [ -f "$simulator_swift/libswiftWebKit.dylib" ]; then
+  python3 - "$simulator_swift" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+path = "YunX.xcodeproj/xcshareddata/xcschemes/YunX.xcscheme"
+tree = ET.parse(path)
+action = tree.getroot().find("TestAction")
+variables = action.find("EnvironmentVariables")
+if variables is None:
+    variables = ET.SubElement(action, "EnvironmentVariables")
+ET.SubElement(variables, "EnvironmentVariable", key="DYLD_FALLBACK_LIBRARY_PATH", value=sys.argv[1], isEnabled="YES")
+tree.write(path, encoding="UTF-8", xml_declaration=True)
+PY
+fi
 xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath "$test_dir/DerivedData" \
   -resultBundlePath "$PWD/build/TestResults.xcresult" \
+  -test-timeouts-enabled YES -default-test-execution-time-allowance 60 -maximum-test-execution-time-allowance 120 \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
 # Decode an actual iOS-encrypted synthetic fixture with the independent desktop JCE code.
 app_data="$(xcrun simctl get_app_container "$simulator_id" io.github.zwthys.yunx data)"

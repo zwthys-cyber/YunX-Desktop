@@ -47,6 +47,9 @@ final class NativeProxyTests: XCTestCase {
             XCTAssertFalse(configuration.contains(profile.username)); XCTAssertFalse(configuration.contains(profile.password))
             _ = try await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/\(id)", query: "force=true")
             try await NativeEngine.shared.refreshNetworkProxy()
+            try await NativeEngine.shared.quiesceForStorage()
+            let restarted = String(decoding: try await NativeEngine.shared.invoke("GET", path: "/api/v1/config"), as: UTF8.self)
+            XCTAssertFalse(restarted.contains(profile.password))
         } catch {
             if let taskID { _ = try? await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/\(taskID)", query: "force=true") }
             try? await NativeEngine.shared.refreshNetworkProxy()
