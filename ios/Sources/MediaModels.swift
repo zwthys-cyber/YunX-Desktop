@@ -149,11 +149,12 @@ struct MediaResult {
     let title: String
     let author: String
     let source: URL
-    let assets: [MediaAsset]
+    var assets: [MediaAsset]
     let parts: [MediaPart]
     let qualities: [MediaQuality]
     let selectedPart: Int
     let actualQuality: Int?
+    var notice: String? = nil
 }
 
 enum MediaNames {

@@ -28,6 +28,7 @@ struct DownloadItem: Codable, Identifiable {
     var preserveFilename: Bool?
     var requiredSize: Int64?
     var sha256: String?
+    var expectedMedia: String?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -78,7 +79,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     @discardableResult
     func add(_ url: URL, filename: String? = nil, headers: [String: String] = [:],
-             expectedSize: Int64? = nil) -> Bool {
+             expectedSize: Int64? = nil, expectedMedia: String? = nil) -> Bool {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
             storageError = "只接受 HTTP 或 HTTPS 文件直链"
             return false
@@ -88,6 +89,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         item.requiresHeaders = !headers.isEmpty
         item.preserveFilename = filename != nil
         item.requiredSize = expectedSize
+        item.expectedMedia = expectedMedia
         if !headers.isEmpty {
             do { try DownloadHeaders.save(headers, id: item.id) }
             catch { storageError = error.localizedDescription; return false }
@@ -263,8 +265,9 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                     throw CloudError.message("返回文件大小与平台记录不一致，已拒绝保存。")
                 }
             }
-            let proposed = items[index].preserveFilename == true ? items[index].filename :
+            let initialName = items[index].preserveFilename == true ? items[index].filename :
                 safeName(response.suggestedFilename ?? items[index].filename)
+            let proposed = try MediaFileValidation.filename(initialName, file: location, kind: items[index].expectedMedia, mime: response.mimeType)
             let original = URL(fileURLWithPath: proposed)
             let ext = original.pathExtension
             let stem = original.deletingPathExtension().lastPathComponent

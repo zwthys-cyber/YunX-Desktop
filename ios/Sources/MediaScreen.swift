@@ -18,6 +18,7 @@ final class MediaScreenModel: ObservableObject {
             let resolved = try await MediaClient().resolve(link, cookie: cookie, part: part, quality: quality)
             try Task.checkCancellation()
             result = resolved
+            notice = resolved.notice
         } catch is CancellationError { }
         catch { failure = error.localizedDescription }
     }
@@ -34,7 +35,7 @@ final class MediaScreenModel: ObservableObject {
             for asset in assets {
                 do {
                     if asset.isHLS { try await NativeEngine.shared.createHLS(asset); hls += 1 }
-                    else if !store.add(asset.url, filename: asset.filename, headers: asset.headers, expectedSize: asset.size) {
+                    else if !store.add(asset.url, filename: asset.filename, headers: asset.headers, expectedSize: asset.size, expectedMedia: asset.kind == .image ? "image" : "video") {
                         throw CloudError.message(store.storageError ?? "创建下载任务失败。")
                     }
                     added += 1
@@ -132,11 +133,11 @@ struct MediaScreen: View {
                         ForEach(result.assets) { asset in
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(asset.filename).lineLimit(2)
-                                if asset.isHLS { Text("HLS 由原生引擎合并，保存为实际 TS/fMP4 容器；当前尚未接入在线播放。").font(.caption).foregroundStyle(.secondary) }
+                                if asset.isHLS { Text("HLS 可在线播放；下载由原生引擎合并为实际 TS/fMP4 容器。").font(.caption).foregroundStyle(.secondary) }
                                 HStack {
                                     Text(asset.label).font(.caption).foregroundStyle(.secondary)
                                     Spacer()
-                                    Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered).disabled(asset.isHLS)
+                                    Button("预览") { preview = MediaPreviewRoute(asset: asset) }.buttonStyle(.bordered)
                                     Button("下载") { model.download([asset], store: downloads) }
                                         .buttonStyle(.bordered).disabled(model.busy)
                                 }
@@ -149,7 +150,7 @@ struct MediaScreen: View {
             .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
             .sheet(item: $browserRoute) { route in
                 BrowserMediaResolver(route: route) { result in
-                    model.result = result; model.failure = nil; model.notice = nil
+                    model.result = result; model.failure = nil; model.notice = result.notice
                 }
             }
             .sheet(item: $preview) { MediaPreviewScreen(asset: $0.asset) }
@@ -178,16 +179,33 @@ final class MoviePreviewState: ObservableObject {
     @Published private(set) var player: AVPlayer?
     @Published private(set) var failure: String?
     private var loader: MovieResourceLoader?
+    private var proxy: HLSLoopbackProxy?
+    private var generation = UUID()
     private var observation: NSKeyValueObservation?
 
-    func start(_ asset: MediaAsset) {
+    func start(_ asset: MediaAsset) async {
         stop()
-        let loader = MovieResourceLoader(url: asset.url, headers: asset.headers)
-        self.loader = loader
-        let item = AVPlayerItem(asset: loader.asset())
+        let current = generation
+        let item: AVPlayerItem
+        if asset.isHLS {
+            do {
+                let proxy = try HLSLoopbackProxy(url: asset.url, headers: asset.headers)
+                self.proxy = proxy
+                let url = try await proxy.start()
+                guard generation == current, !Task.isCancelled else { await proxy.stop(); return }
+                item = AVPlayerItem(url: url)
+            } catch { if generation == current { failure = "无法启动 HLS 播放，请重新解析或下载。" }; return }
+        } else {
+            let loader = MovieResourceLoader(url: asset.url, headers: asset.headers)
+            self.loader = loader
+            item = AVPlayerItem(asset: loader.asset())
+        }
         observation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             if item.status == .failed {
-                Task { @MainActor [weak self] in self?.failure = "暂时无法预览，请重新解析或下载后播放。" }
+                Task { @MainActor [weak self] in
+                    guard self?.generation == current else { return }
+                    self?.failure = "暂时无法预览，请重新解析或下载后播放。"
+                }
             }
         }
         player = AVPlayer(playerItem: item)
@@ -195,6 +213,9 @@ final class MoviePreviewState: ObservableObject {
     }
 
     func stop() {
+        generation = UUID()
+        if let proxy { Task { await proxy.stop() } }
+        proxy = nil
         observation = nil
         player?.pause(); player?.replaceCurrentItem(with: nil); player = nil
         loader?.close(); loader = nil
@@ -214,7 +235,7 @@ struct MediaPreviewScreen: View {
                     VStack {
                         if let player = movie.player { VideoPlayer(player: player) }
                         if let failure = movie.failure { Text(failure).foregroundStyle(.red).padding() }
-                    }.onAppear { movie.start(asset) }.onDisappear { movie.stop() }
+                    }.task { await movie.start(asset) }.onDisappear { movie.stop() }
                 } else { MediaImagePreview(asset: asset) }
             }.navigationTitle(asset.label).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }

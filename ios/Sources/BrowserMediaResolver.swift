@@ -13,7 +13,8 @@ enum BrowserMediaPayload {
         guard object["error"] == nil, let resolved = MediaLink.parseURL(current), resolved.provider == expected.provider,
               !resolved.id.isEmpty, expected.id.isEmpty || expected.id == resolved.id,
               let work = object["workID"] as? String, work == resolved.id,
-              object["src"] as? String != "dom" else {
+              let source = object["src"] as? String,
+              (expected.provider == .douyin ? ["ssr", "hook"] : ["xhs"]).contains(source) else {
             throw CloudError.message("尚未读取到原作品的完整数据，请完成页面验证并等待作品加载后重试。")
         }
         let title = object["title"] as? String ?? expected.provider.rawValue
@@ -56,6 +57,7 @@ struct BrowserMediaResolver: View {
     let route: BrowserMediaRoute
     let complete: (MediaResult) -> Void
     @StateObject private var state = BrowserMediaState()
+    @State private var reading: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -71,7 +73,7 @@ struct BrowserMediaResolver: View {
                     ToolbarItem(placement: .confirmationAction) { Button("读取作品") { read() }.disabled(state.busy) }
                     ToolbarItem(placement: .bottomBar) { Button("返回原作品") { state.view?.load(URLRequest(url: route.link.url)) } }
                 }
-        }.onDisappear { state.closed = true; state.view?.stopLoading() }
+        }.onDisappear { reading?.cancel(); state.closed = true; state.view?.stopLoading() }
     }
     @MainActor private func read() {
         guard !state.busy, let view = state.view, let current = view.url else { return }
@@ -82,11 +84,18 @@ struct BrowserMediaResolver: View {
         }
         state.busy = true; state.message = nil
         view.evaluateJavaScript(script) { value, error in
-            state.busy = false
-            guard !state.closed else { return }
-            guard error == nil, let object = value as? [String: Any] else { state.message = "页面数据尚未就绪，请完成验证后重试。"; return }
-            do { complete(try BrowserMediaPayload.result(object, expected: route.link, current: current)); dismiss() }
-            catch { state.message = "读取失败，请确认当前是原作品并等待完整数据加载。" }
+            guard !state.closed else { state.busy = false; return }
+            guard error == nil, let object = value as? [String: Any] else { state.busy = false; state.message = "页面数据尚未就绪，请完成验证后重试。"; return }
+            reading = Task { @MainActor in
+                defer { state.busy = false }
+                do {
+                    var result = try BrowserMediaPayload.result(object, expected: route.link, current: current)
+                    if route.link.provider == .xhs { result = try await XHSImageResolver().resolve(result) }
+                    try Task.checkCancellation()
+                    guard !state.closed else { return }
+                    complete(result); dismiss()
+                } catch { if !state.closed && !Task.isCancelled { state.message = "读取失败，请确认当前是原作品并等待完整数据加载。" } }
+            }
         }
     }
 }
