@@ -8,6 +8,8 @@ struct SavedCredential: Codable, Identifiable {
     var platform: String
     var remark: String
     var secret: String
+    var isPrimary: Bool?
+    var backupFields: [String: String]?
 }
 
 /// 凭证只写入应用自己的 Keychain 项，不扫描其他应用或浏览器。
@@ -51,6 +53,45 @@ final class CredentialVault: ObservableObject {
         var updated = accounts
         updated[index].secret = secret
         persist(updated)
+    }
+
+    func setPrimary(_ id: UUID) {
+        guard let chosen = accounts.first(where: { $0.id == id }) else { return }
+        var updated = accounts
+        for index in updated.indices where updated[index].platform == chosen.platform {
+            updated[index].isPrimary = updated[index].id == id
+        }
+        persist(updated)
+    }
+
+    func rename(_ id: UUID, remark: String) {
+        guard let index = accounts.firstIndex(where: { $0.id == id }) else { return }
+        var updated = accounts
+        updated[index].remark = remark
+        persist(updated)
+    }
+
+    @discardableResult
+    func restore(_ incoming: [SavedCredential]) -> Int {
+        var updated = accounts
+        var restored = 0
+        for var item in incoming {
+            if let index = updated.firstIndex(where: { $0.platform == item.platform && $0.secret == item.secret }) {
+                item.id = updated[index].id
+                updated[index] = item
+            } else {
+                if updated.contains(where: { $0.id == item.id }) { item.id = UUID() }
+                updated.append(item)
+            }
+            if item.isPrimary == true {
+                for index in updated.indices where updated[index].platform == item.platform && updated[index].id != item.id {
+                    updated[index].isPrimary = false
+                }
+            }
+            restored += 1
+        }
+        persist(updated)
+        return message == nil ? restored : 0
     }
 
     func delete(_ id: UUID) {

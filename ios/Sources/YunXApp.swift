@@ -20,6 +20,7 @@ struct YunXApp: App {
                 NavigationStack {
                     List {
                         NavigationLink("账号管理") { AccountScreen(vault: vault) }
+                        NavigationLink("认证备份") { AccountBackupScreen(vault: vault) }
                         NavigationLink("设置与收藏") { SettingsScreen(downloads: downloads) }
                     }.navigationTitle("我的")
                 }.tabItem { Label("我的", systemImage: "person.crop.circle") }
@@ -165,7 +166,7 @@ struct AccountScreen: View {
                     ForEach(vault.accounts) { account in
                         HStack {
                             VStack(alignment: .leading) {
-                                Text(account.platform)
+                                Text(account.platform + (account.isPrimary == true ? " · 主账号" : ""))
                                 Text(account.remark.isEmpty ? "未填写备注" : account.remark)
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -174,7 +175,10 @@ struct AccountScreen: View {
                                 Button(verifyingID == account.id ? "验证中" : "验证") { verify(account) }
                                     .disabled(verifyingID != nil).buttonStyle(.bordered)
                             }
-                            Button("删除", role: .destructive) { vault.delete(account.id) }
+                            Menu {
+                                Button("设为主账号") { vault.setPrimary(account.id) }
+                                Button("删除", role: .destructive) { vault.delete(account.id) }
+                            } label: { Image(systemName: "ellipsis.circle") }
                         }
                     }
                 }

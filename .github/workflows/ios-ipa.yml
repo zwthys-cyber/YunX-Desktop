@@ -43,6 +43,12 @@ jobs:
           fi
           xcodegen --version
 
+      - name: Install JDK for desktop backup interoperability fixtures
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Run offline protocol tests on iOS Simulator
         shell: bash
         run: |

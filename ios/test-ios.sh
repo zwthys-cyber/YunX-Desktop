@@ -6,6 +6,9 @@ if [ "$(uname -s)" != Darwin ]; then
   exit 1
 fi
 cd -- "$(dirname -- "$0")"
+# Generate interoperability vectors using the desktop's Java crypto implementation.
+command -v java >/dev/null || { echo "需要 JDK 17+ 生成备份兼容测试向量。" >&2; exit 1; }
+java Fixtures/BackupFixture.java > Tests/backup-vectors.json
 xcodegen generate
 mkdir -p build
 simulator_id="$(xcrun simctl list devices available --json | python3 -c '
