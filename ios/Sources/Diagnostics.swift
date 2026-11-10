@@ -123,11 +123,11 @@ struct DownloadDiagnosticScreen: View {
                 if item.expected > 0 { LabeledContent("响应预期", value: ByteCountFormatter.string(fromByteCount: item.expected, countStyle: .file)) }
                 if let size = item.requiredSize, size > 0 { LabeledContent("平台记录大小", value: ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
                 LabeledContent("凭证请求头", value: item.requiresHeaders == true ? "由钥匙串提供" : "无")
-                LabeledContent("运行方式", value: "URLSession 前台会话")
+                LabeledContent("运行方式", value: item.backgroundTransfer == true ? "系统后台传输" : "URLSession 前台会话")
                 LabeledContent("队列并发", value: String(store.maximumConcurrent))
                 if let digest = item.sha256 { Text("SHA-256: " + digest).font(.caption.monospaced()).textSelection(.enabled) }
                 if let error = item.error { Text(error).foregroundStyle(.red) }
-                Text("此页不显示原始链接或请求头。重启后需手动继续；直链过期时请重新解析。")
+                Text("此页不显示原始链接或请求头。系统后台任务在启动时重新关联，其他任务需手动继续；直链过期时请重新解析。")
                     .font(.footnote).foregroundStyle(.secondary)
             } else { Text("任务记录已删除。") }
         }.navigationTitle("任务诊断")

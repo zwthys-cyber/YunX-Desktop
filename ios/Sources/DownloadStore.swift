@@ -29,11 +29,13 @@ struct DownloadItem: Codable, Identifiable {
     var requiredSize: Int64?
     var sha256: String?
     var expectedMedia: String?
+    var backgroundTransfer: Bool?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
-/// 本阶段使用前台会话，不宣称支持长时间后台下载。
+/// Public HTTPS downloads can use the system background session; credentialed requests stay in-process.
 final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegate {
+    static let shared = DownloadStore()
     @Published private(set) var items: [DownloadItem] = []
     @Published var storageError: String?
     @Published private(set) var hashing = Set<UUID>()
@@ -48,25 +50,34 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private let root: URL
     private let cache: URL
     private var session: URLSession!
+    private var backgroundSession: URLSession?
+    private var restoringBackground = false
+    private var restorableBackground = Set<UUID>()
     private let manager = FileManager.default
     private var unreadableIndex = false
 
     override convenience init() {
         self.init(root: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Downloads", isDirectory: true),
-                  cache: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX", isDirectory: true))
+                  cache: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX", isDirectory: true), backgroundEnabled: true)
     }
 
-    init(root: URL, cache: URL, configuration: URLSessionConfiguration = .default) {
+    init(root: URL, cache: URL, configuration: URLSessionConfiguration = .default, backgroundEnabled: Bool = false) {
         self.root = root; self.cache = cache
         super.init()
         do {
-            try manager.createDirectory(at: root, withIntermediateDirectories: true)
-            try manager.createDirectory(at: cache, withIntermediateDirectories: true)
+            let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+            try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: protection)
+            try manager.createDirectory(at: cache, withIntermediateDirectories: true, attributes: protection)
             let index = cache.appendingPathComponent("tasks.json")
             if manager.fileExists(atPath: index.path) {
                 items = try JSONDecoder().decode([DownloadItem].self, from: Data(contentsOf: index))
+                restorableBackground = Set(items.filter { [.downloading, .waiting].contains($0.state) && $0.backgroundTransfer == true }.map(\.id))
                 for index in items.indices where [.downloading, .pausing, .waiting].contains(items[index].state) {
                     items[index].state = .paused
+                }
+                try manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: index.path)
+                for item in items where manager.fileExists(atPath: resumeURL(item.id).path) {
+                    try manager.setAttributes(protection, ofItemAtPath: resumeURL(item.id).path)
                 }
             }
         } catch {
@@ -79,14 +90,25 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 60
         session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        if backgroundEnabled {
+            restoringBackground = true
+            let background = URLSessionConfiguration.background(withIdentifier: BackgroundDownloadPolicy.identifier)
+            background.sessionSendsLaunchEvents = true
+            background.isDiscretionary = false
+            background.httpCookieStorage = nil; background.httpShouldSetCookies = false; background.urlCredentialStorage = nil
+            backgroundSession = URLSession(configuration: background, delegate: self, delegateQueue: .main)
+            backgroundSession?.getAllTasks { [weak self] tasks in
+                DispatchQueue.main.async { self?.restoreBackground(tasks) }
+            }
+        }
     }
 
     @discardableResult
     func add(_ url: URL, filename: String? = nil, headers: [String: String] = [:],
              expectedSize: Int64? = nil, expectedMedia: String? = nil) -> Bool {
         guard !unreadableIndex else { return false }
-        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
-            storageError = "只接受 HTTP 或 HTTPS 文件直链"
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil, url.user == nil, url.password == nil else {
+            storageError = "只接受不含账号密码的 HTTP 或 HTTPS 文件直链"
             return false
         }
         let name = safeName(filename ?? url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
@@ -95,6 +117,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         item.preserveFilename = filename != nil
         item.requiredSize = expectedSize
         item.expectedMedia = expectedMedia
+        item.backgroundTransfer = backgroundSession != nil && BackgroundDownloadPolicy.allows(url, headers: headers)
         if !headers.isEmpty {
             do { try DownloadHeaders.save(headers, id: item.id) }
             catch { storageError = error.localizedDescription; return false }
@@ -122,7 +145,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     private func drainQueue() {
-        guard !unreadableIndex else { return }
+        guard !unreadableIndex, !restoringBackground else { return }
         for id in items.reversed().filter({ $0.state == .waiting }).map(\.id) {
             guard active.count < max(1, min(6, maximumConcurrent)) else { break }
             launch(id)
@@ -150,9 +173,11 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               items[index].state != .completed, items[index].state != .pausing else { return }
         var request = URLRequest(url: items[index].url)
+        var headers: [String: String] = [:]
         if items[index].requiresHeaders == true {
             do {
-                for (key, value) in try DownloadHeaders.load(id) {
+                headers = try DownloadHeaders.load(id)
+                for (key, value) in headers {
                     request.setValue(value, forHTTPHeaderField: key)
                 }
             } catch {
@@ -162,15 +187,18 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 return
             }
         }
+        let usesBackground = backgroundSession != nil && BackgroundDownloadPolicy.allows(items[index].url, headers: headers)
+        let targetSession = usesBackground ? backgroundSession! : session!
         let task: URLSessionDownloadTask
         if let resume = try? Data(contentsOf: resumeURL(id)) {
-            task = session.downloadTask(withResumeData: resume)
+            task = targetSession.downloadTask(withResumeData: resume)
         } else {
-            task = session.downloadTask(with: request)
+            task = targetSession.downloadTask(with: request)
         }
         task.taskDescription = id.uuidString
         active[id] = task
         items[index].state = .downloading
+        items[index].backgroundTransfer = usesBackground
         items[index].error = nil
         guard save() else {
             active.removeValue(forKey: id)
@@ -181,6 +209,26 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             return
         }
         task.resume()
+    }
+
+    private func restoreBackground(_ tasks: [URLSessionTask]) {
+        defer { restoringBackground = false; restorableBackground.removeAll(); drainQueue() }
+        guard !unreadableIndex else { tasks.forEach { $0.cancel() }; return }
+        for candidate in tasks {
+            guard let task = candidate as? URLSessionDownloadTask, let raw = task.taskDescription, let id = UUID(uuidString: raw),
+                  let index = items.firstIndex(where: { $0.id == id }), items[index].backgroundTransfer == true,
+                  items[index].state != .completed, !removed.contains(id) else { candidate.cancel(); continue }
+            guard task.state == .running || task.state == .suspended else { continue }
+            guard active[id] == nil else { task.cancel(); continue }
+            active[id] = task
+            if restorableBackground.contains(id) {
+                items[index].state = .downloading; items[index].error = nil
+                items[index].received = max(items[index].received, task.countOfBytesReceived)
+                if task.countOfBytesExpectedToReceive > 0 { items[index].expected = task.countOfBytesExpectedToReceive }
+                if task.state == .suspended { task.resume() }
+            } else { pause(id) }
+        }
+        if !save() { pauseAll() }
     }
 
     func pause(_ id: UUID) {
@@ -244,7 +292,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     private func writeResume(_ data: Data?, id: UUID) {
         guard let data else { return }
-        do { try data.write(to: resumeURL(id), options: [.atomic, .completeFileProtection]) }
+        do { try data.write(to: resumeURL(id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
         catch { storageError = "无法保存断点：\(error.localizedDescription)" }
     }
 
@@ -253,7 +301,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         do {
             try JSONEncoder().encode(items).write(
                 to: cache.appendingPathComponent("tasks.json"),
-                options: [.atomic, .completeFileProtection]
+                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
             )
             storageError = nil
             return true
@@ -353,7 +401,10 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
         if items[index].state == .pausing { return }
         if items[index].state == .paused, let cancellation = error as NSError?,
-           cancellation.domain == NSURLErrorDomain, cancellation.code == NSURLErrorCancelled { return }
+           cancellation.domain == NSURLErrorDomain, cancellation.code == NSURLErrorCancelled {
+            writeResume(cancellation.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, id: id)
+            save(); return
+        }
         if let error = error as NSError? {
             let code = error.code
             Task { await Diagnostics.shared.record(.downloadFailed, code: code) }
@@ -367,5 +418,10 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             }
         }
         save()
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        guard session.configuration.identifier == BackgroundDownloadPolicy.identifier else { return }
+        Task { @MainActor in BackgroundDownloadEvents.finished() }
     }
 }

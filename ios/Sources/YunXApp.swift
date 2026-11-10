@@ -4,7 +4,8 @@ import SwiftUI
 @main
 @MainActor
 struct YunXApp: App {
-    @StateObject private var downloads = DownloadStore()
+    @UIApplicationDelegateAdaptor(YunXAppDelegate.self) private var appDelegate
+    @StateObject private var downloads = DownloadStore.shared
     @StateObject private var vault = CredentialVault()
     @StateObject private var library = LinkLibrary()
     @StateObject private var assemblies = MediaAssemblyStore()
@@ -63,11 +64,11 @@ struct DownloadScreen: View {
                             return
                         }
                         inputError = nil
-                        store.add(url)
-                        input = ""
+                        if store.add(url) { input = "" }
+                        else { inputError = store.storageError }
                     }
                     if let inputError { Text(inputError).foregroundStyle(.red) }
-                    Text("夸克和 UC 分享链接请到「网盘」解析；此处只接受文件直链。当前仅支持前台下载。")
+                    Text("分享链接请到「网盘」解析。公开 HTTPS 文件使用系统后台传输；带账号或自定义鉴权头的请求使用前台会话。系统可能延迟后台任务，强制退出后需重新打开应用。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error = store.storageError {
@@ -257,7 +258,7 @@ struct PortStatusScreen: View {
                     Label("B 站单文件解析、分 P 与画质", systemImage: "play.rectangle")
                     Label("Pixiv 多页原图与批量下载", systemImage: "photo.on.rectangle")
                     Label("原生 MP4 与图片预览", systemImage: "play.circle")
-                    Label("HTTP(S) 直链前台下载", systemImage: "doc")
+                    Label("HTTP(S) 直链与公开 HTTPS 后台会话", systemImage: "doc")
                     Label("暂停、断点数据保存、重试", systemImage: "pause.circle")
                     Label("任务记录与文件导出", systemImage: "square.and.arrow.up")
                     Label("Keychain 多账号凭证存储", systemImage: "key")
@@ -274,7 +275,7 @@ struct PortStatusScreen: View {
                         "HLS、DASH 合轨与 Live Photo",
                         "BT、磁力、ed2k 与 Gopeed 引擎",
                         "其他平台登录/令牌适配与运行诊断",
-                        "分享扩展、浏览器集成与后台下载"
+                        "分享扩展、浏览器集成与后台真机验收"
                     ], id: \.self) { Text($0) }
                 }
                 Section("开源") {

@@ -85,7 +85,7 @@ struct SettingsScreen: View {
             }
             Section("下载") {
                 Stepper("同时下载：\(downloads.maximumConcurrent)", value: $downloads.maximumConcurrent, in: 1...6)
-                Text("调低并发后，正在下载的任务继续；新任务等待空闲位置。下载目前使用前台会话。")
+                Text("调低并发后，正在下载的任务继续；新任务等待空闲位置。公开 HTTPS 任务使用系统后台传输，带账号鉴权头的任务使用前台会话。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("链接记录") {
