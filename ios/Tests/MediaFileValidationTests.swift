@@ -3,6 +3,14 @@ import XCTest
 @testable import YunX
 
 final class MediaFileValidationTests: XCTestCase {
+    func testArchiveDownloadRejectsHTMLLoginPage() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("<!doctype html><html>Sign in</html>".utf8).write(to: file)
+        XCTAssertThrowsError(try MediaFileValidation.filename("repo.zip", file: file, kind: "zip", mime: "text/html"))
+        try (Data([0x50, 0x4b, 0x05, 0x06]) + Data(repeating: 0, count: 18)).write(to: file)
+        XCTAssertEqual(try MediaFileValidation.filename("repo.zip", file: file, kind: "zip", mime: "application/zip"), "repo.zip")
+    }
     func testActualImageContainerDeterminesExtension() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: file) }

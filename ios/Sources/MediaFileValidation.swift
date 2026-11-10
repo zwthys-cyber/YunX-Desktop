@@ -6,6 +6,15 @@ import UniformTypeIdentifiers
 enum MediaFileValidation {
     static func filename(_ proposed: String, file: URL, kind: String?, mime: String?) throws -> String {
         guard let kind else { return proposed }
+        if kind == "zip" {
+            let reader = try FileHandle(forReadingFrom: file)
+            defer { try? reader.close() }
+            let prefix = try reader.read(upToCount: 4) ?? Data()
+            guard prefix == Data([0x50, 0x4b, 0x03, 0x04]) || prefix == Data([0x50, 0x4b, 0x05, 0x06]) else {
+                throw CloudError.message("GitHub 返回内容不是 ZIP，可能需要重新授权；已拒绝保存。")
+            }
+            return proposed
+        }
         if kind == "image" {
             guard let source = CGImageSourceCreateWithURL(file as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
                   CGImageSourceGetCount(source) > 0, let raw = CGImageSourceGetType(source),

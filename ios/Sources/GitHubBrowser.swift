@@ -419,7 +419,7 @@ struct GitHubRepositoryScreen: View {
                     defer { downloadingArchive = false }
                     do {
                         let plan = try await client.archiveDownload(snapshot)
-                        message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers) ? "ZIP 已加入下载" : downloads.storageError
+                        message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedMedia: "zip") ? "ZIP 已加入下载" : downloads.storageError
                     } catch { if !Task.isCancelled { message = error.localizedDescription } }
                 }
             }.disabled(downloadingArchive)
