@@ -9,7 +9,7 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     case guangya = "光鸭"
     case ilanzou = "蓝奏优享"
     var supportsWebCookieLogin: Bool { self == .quark || self == .uc }
-    var supportsManagement: Bool { self == .guangya || self == .ilanzou }
+    var supportsManagement: Bool { [CloudProvider.quark, .uc, .pan123, .guangya, .ilanzou].contains(self) }
     var id: String { rawValue }
     var apiHost: String {
         switch self { case .quark: return "drive-pc.quark.cn"; case .uc: return "pc-api.uc.cn"; case .pan123: return "yun.123pan.cn"; case .guangya: return "api.guangyapan.com"; case .ilanzou: return "apis.ilanzou.com" }
@@ -91,6 +91,13 @@ enum CloudError: LocalizedError {
     }
 }
 
+enum CloudNamePolicy {
+    static func validate(_ name: String) throws {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name != ".", name != "..", name.utf8.count <= 255,
+              !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw CloudError.message("文件名称为空、过长或含无效字符。") }
+    }
+}
+
 /// API requests never follow redirects with account credentials.
 private final class CloudRedirectPolicy: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask,
@@ -156,9 +163,49 @@ final class CloudClient {
     }
 
     func mutate(_ operation: CloudMutation) async throws {
+        if let pan123 { try await pan123.mutate(operation); return }
         if let ilanzou { try await ilanzou.mutate(operation); return }
-        guard let guangya else { throw CloudError.message("该平台的文件管理尚未接入。") }
-        try await guangya.mutate(operation)
+        if let guangya { try await guangya.mutate(operation); return }
+        guard provider == .quark || provider == .uc, !cookie.isEmpty else { throw CloudError.message("请先登录支持文件管理的平台。") }
+        let path: String
+        let body: [String: Any]
+        switch operation {
+        case .createFolder(let name, let parent):
+            try CloudNamePolicy.validate(name)
+            path = "/1/clouddrive/file"
+            body = ["pdir_fid": parent, "file_name": name, "dir_path": "", "dir_init_lock": false]
+        case .rename(let file, let name):
+            try CloudNamePolicy.validate(name)
+            path = "/1/clouddrive/file/rename"; body = ["fid": file.id, "file_name": name]
+        case .move(let file, let parent):
+            guard file.id != parent else { throw CloudError.message("不能将文件夹移动到自身。") }
+            path = "/1/clouddrive/file/move"
+            body = ["action_type": 1, "to_pdir_fid": parent, "filelist": [file.id], "exclude_fids": [String]()]
+        case .trash(let file):
+            path = "/1/clouddrive/file/delete"
+            body = ["action_type": 2, "filelist": [file.id], "exclude_fids": [String]()]
+        case .save(let file, let share, let parent):
+            guard !file.token.isEmpty else { throw CloudError.message("分享文件令牌缺失，请重新解析。") }
+            let token = try await shareToken(share)
+            path = "/1/clouddrive/share/sharepage/save"
+            body = ["pwd_id": share.shareID, "stoken": token, "pdir_fid": file.parentID, "to_pdir_fid": parent,
+                    "fid_list": [file.id], "fid_token_list": [file.token], "scene": "link"]
+        }
+        let data = try await request(path, body: body, allowEmptyData: true) as? [String: Any] ?? [:]
+        if case .createFolder = operation {
+            guard let id = data["fid"] as? String, !id.isEmpty else { throw CloudError.message("平台未确认创建文件夹，请刷新后确认。") }
+        }
+        if let id = data["task_id"] as? String, !id.isEmpty { try await waitForMutation(id) }
+    }
+    private func waitForMutation(_ id: String) async throws {
+        for _ in 0..<60 {
+            try await Task.sleep(for: .milliseconds(500))
+            let data = try await request("/1/clouddrive/task", query: ["task_id": id, "retry_index": "0"]) as? [String: Any] ?? [:]
+            let status = (data["status"] as? NSNumber)?.intValue ?? (data["task_status"] as? NSNumber)?.intValue
+            if status == 3 { throw CloudError.message("平台文件操作失败，请刷新确认。") }
+            if status == 2 || ((data["finished_at"] as? NSNumber)?.int64Value ?? 0) > 0 { return }
+        }
+        throw CloudError.message("平台操作仍在处理中，请刷新确认，避免重复提交。")
     }
 
     private func shareToken(_ share: CloudShare) async throws -> String {
@@ -265,7 +312,7 @@ final class CloudClient {
     }
 
     private func request(_ path: String, query: [String: String] = [:], body: [String: Any]? = nil,
-                         guest: Bool = false, origin: String? = nil, agent: String? = nil) async throws -> Any {
+                         guest: Bool = false, origin: String? = nil, agent: String? = nil, allowEmptyData: Bool = false) async throws -> Any {
         var parts = URLComponents()
         parts.scheme = "https"
         parts.host = provider.apiHost
@@ -308,8 +355,7 @@ final class CloudClient {
         }
         let status = (root["status"] as? NSNumber)?.intValue
         let code = (root["code"] as? NSNumber)?.intValue
-        guard (status == 200 && (code == nil || code == 0)) || (status == nil && code == 0),
-              let result = root["data"], !(result is NSNull) else {
+        guard (status == 200 && (code == nil || code == 0)) || (status == nil && code == 0) else {
             let description: String
             switch code {
             case 31001: description = "需要登录或账号已失效，请重新登录。"
@@ -322,7 +368,9 @@ final class CloudClient {
             }
             throw CloudError.message(description)
         }
-        return result
+        if let result = root["data"], !(result is NSNull) { return result }
+        if allowEmptyData { return [String: Any]() }
+        throw CloudError.message("平台未返回数据，可能需要重新登录或更新适配。")
     }
 
     private func mergeResponseCookies(_ response: HTTPURLResponse, guest: Bool) {

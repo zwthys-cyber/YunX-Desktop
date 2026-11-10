@@ -179,3 +179,54 @@ final class CloudDriveTests: XCTestCase {
         XCTAssertNil(item.requiredSize)
     }
 }
+
+private final class MutationPolls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; value += 1; return value }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+}
+
+extension CloudDriveTests {
+    func testQuarkAndUCSaveUseFileTokensAndWaitForConfirmedCompletion() async throws {
+        defer { CloudMockProtocol.handler = nil }
+        for provider in [CloudProvider.quark, .uc] {
+            let polls = MutationPolls()
+            CloudMockProtocol.handler = { request in
+                XCTAssertEqual(request.url?.host, provider.apiHost)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "test-only-cookie")
+                let path = request.url!.path
+                if path.hasSuffix("/token") { return (200, [:], ["status": 200, "data": ["stoken": "share-access"]]) }
+                if path.hasSuffix("/save") {
+                    let body = try self.body(request)
+                    XCTAssertEqual(body["stoken"] as? String, "share-access")
+                    XCTAssertEqual(body["fid_token_list"] as? [String], ["file-access"])
+                    XCTAssertEqual(body["pdir_fid"] as? String, "share-parent")
+                    XCTAssertEqual(body["to_pdir_fid"] as? String, "destination")
+                    return (200, [:], ["status": 200, "data": ["task_id": "save-task"]])
+                }
+                XCTAssertEqual(path, "/1/clouddrive/task")
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertEqual(query.first(where: { $0.name == "task_id" })?.value, "save-task")
+                return (200, [:], ["status": 200, "data": ["status": polls.next() < 2 ? 1 : 2]])
+            }
+            let client = client(provider, cookie: "test-only-cookie")
+            let file = CloudFile(id: "file", name: "fixture.bin", size: 10, isDirectory: false, parentID: "share-parent", token: "file-access")
+            try await client.mutate(.save(file: file, share: CloudShare(provider: provider, shareID: "share", passcode: ""), parent: "destination"))
+            XCTAssertEqual(polls.count, 2)
+        }
+    }
+    func testRenameCanAcknowledgeEmptyDataButFailedAsyncTaskNeverSucceeds() async throws {
+        CloudMockProtocol.handler = { request in
+            if request.url?.path.hasSuffix("/rename") == true { return (200, [:], ["status": 200, "data": NSNull()]) }
+            if request.url?.path.hasSuffix("/move") == true { return (200, [:], ["status": 200, "data": ["task_id": "failed-task"]]) }
+            return (200, [:], ["status": 200, "data": ["status": 3]])
+        }
+        defer { CloudMockProtocol.handler = nil }
+        let client = client(.quark, cookie: "test-only-cookie")
+        let file = CloudFile(id: "file", name: "old.bin", size: 10, isDirectory: false, parentID: "0", token: "")
+        try await client.mutate(.rename(file: file, name: "new.bin"))
+        do { try await client.mutate(.move(file: file, parent: "target")); XCTFail("Failed async operation must not appear successful") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("操作失败")) }
+    }
+}

@@ -49,12 +49,15 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private let cache: URL
     private var session: URLSession!
     private let manager = FileManager.default
+    private var unreadableIndex = false
 
-    override init() {
-        root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Downloads", isDirectory: true)
-        cache = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("YunX", isDirectory: true)
+    override convenience init() {
+        self.init(root: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Downloads", isDirectory: true),
+                  cache: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX", isDirectory: true))
+    }
+
+    init(root: URL, cache: URL, configuration: URLSessionConfiguration = .default) {
+        self.root = root; self.cache = cache
         super.init()
         do {
             try manager.createDirectory(at: root, withIntermediateDirectories: true)
@@ -67,9 +70,10 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 }
             }
         } catch {
-            storageError = "无法读取下载记录：\(error.localizedDescription)"
+            unreadableIndex = true
+            storageError = "下载记录无法读取，原记录已保留；请恢复可用空间或从备份处理后重启。"
         }
-        let config = URLSessionConfiguration.default
+        let config = configuration
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
         config.urlCredentialStorage = nil
@@ -80,6 +84,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     @discardableResult
     func add(_ url: URL, filename: String? = nil, headers: [String: String] = [:],
              expectedSize: Int64? = nil, expectedMedia: String? = nil) -> Bool {
+        guard !unreadableIndex else { return false }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
             storageError = "只接受 HTTP 或 HTTPS 文件直链"
             return false
@@ -96,22 +101,28 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
         storageError = nil
         items.insert(item, at: 0)
+        guard save() else {
+            items.removeAll { $0.id == item.id }
+            DownloadHeaders.delete(item.id)
+            return false
+        }
         Task { await Diagnostics.shared.record(.downloadAdded) }
-        save()
-        start(item.id)
+        drainQueue()
         return true
     }
 
     func start(_ id: UUID) {
-        guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
+        guard !unreadableIndex, active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               [.waiting, .paused, .failed].contains(items[index].state) else { return }
+        let previous = items[index]
         items[index].state = .waiting
         items[index].error = nil
-        save()
+        guard save() else { items[index] = previous; return }
         drainQueue()
     }
 
     private func drainQueue() {
+        guard !unreadableIndex else { return }
         for id in items.reversed().filter({ $0.state == .waiting }).map(\.id) {
             guard active.count < max(1, min(6, maximumConcurrent)) else { break }
             launch(id)
@@ -125,11 +136,13 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func resumeAll() {
+        guard !unreadableIndex else { return }
+        let previous = items
         for index in items.indices where [.paused, .failed].contains(items[index].state) {
             items[index].state = .waiting
             items[index].error = nil
         }
-        save()
+        guard save() else { items = previous; return }
         drainQueue()
     }
 
@@ -159,7 +172,14 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         active[id] = task
         items[index].state = .downloading
         items[index].error = nil
-        save()
+        guard save() else {
+            active.removeValue(forKey: id)
+            task.taskDescription = nil
+            task.cancel()
+            items[index].state = .failed
+            items[index].error = "无法保存任务状态，下载未启动。"
+            return
+        }
         task.resume()
     }
 
@@ -186,13 +206,15 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func delete(_ id: UUID) {
+        guard !unreadableIndex else { return }
+        let previous = items
+        items.removeAll { $0.id == id }
+        guard save() else { items = previous; return }
         removed.insert(id)
         active.removeValue(forKey: id)?.cancel()
-        items.removeAll { $0.id == id }
         try? manager.removeItem(at: resumeURL(id))
         DownloadHeaders.delete(id)
         // 下载完成的文件保留，删除记录不会隐式删除用户文件。
-        save()
         drainQueue()
     }
 
@@ -226,13 +248,16 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         catch { storageError = "无法保存断点：\(error.localizedDescription)" }
     }
 
-    private func save() {
+    @discardableResult private func save() -> Bool {
+        guard !unreadableIndex else { return false }
         do {
             try JSONEncoder().encode(items).write(
                 to: cache.appendingPathComponent("tasks.json"),
                 options: [.atomic, .completeFileProtection]
             )
-        } catch { storageError = "无法保存下载记录：\(error.localizedDescription)" }
+            storageError = nil
+            return true
+        } catch { storageError = "无法保存下载记录，请检查可用空间。"; return false }
     }
 
     private func safeName(_ raw: String) -> String {

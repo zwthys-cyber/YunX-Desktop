@@ -207,8 +207,7 @@ final class GuangYaClient {
         throw CloudError.message("光鸭操作仍在处理中，请稍后刷新确认，避免重复提交。")
     }
     private static func validateName(_ name: String) throws {
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name != ".", name != "..", name.utf8.count <= 255,
-              !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw CloudError.message("文件名称为空、过长或含无效字符。") }
+        try CloudNamePolicy.validate(name)
     }
     private func request(_ path: String, body: [String: Any]?, account: Bool = false, authenticated: Bool = false, extraHeaders: [String: String] = [:], mayRefresh: Bool = true) async throws -> [String: Any] {
         if authenticated && token.isEmpty { throw CloudError.message("请先登录光鸭账号。") }

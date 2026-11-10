@@ -68,6 +68,73 @@ final class Pan123Client {
         guard let name = result["Nickname"] as? String, !name.isEmpty else { throw CloudError.message("123 登录状态无效。") }
         return name
     }
+    func mutate(_ operation: CloudMutation) async throws {
+        guard !token.isEmpty else { throw CloudError.message("请先登录 123 账号。") }
+        let path: String
+        let body: [String: Any]
+        switch operation {
+        case .createFolder(let name, let parent):
+            try CloudNamePolicy.validate(name)
+            path = "/b/api/file/upload_request"
+            body = ["driveId": 0, "parentFileId": try Self.numericID(parent), "fileName": name, "size": 0, "type": 1, "etag": "", "duplicate": 1, "NotReuse": true, "RequestSource": NSNull()]
+        case .rename(let file, let name):
+            try CloudNamePolicy.validate(name)
+            path = "/b/api/file/rename"
+            body = ["driveId": 0, "fileId": try Self.numericID(file.id), "fileName": name, "duplicate": 1, "event": "fileRename", "operatePlace": "right", "RequestSource": NSNull()]
+        case .move(let file, let parent):
+            let target = try Self.numericID(parent)
+            let source = try Self.numericID(file.id)
+            guard !file.isDirectory || target != source else { throw CloudError.message("不能将文件夹移动到自身。") }
+            path = "/b/api/file/mod_pid"
+            body = ["fileIdList": [["FileId": source]], "parentFileId": target, "event": "fileMove", "operatePlace": 1, "RequestSource": NSNull()]
+        case .trash(let file):
+            let metadata = try Self.metadata(file)
+            path = "/b/api/file/trash"
+            body = ["driveId": 0, "fileTrashInfoList": [["FileId": try Self.numericID(file.id), "FileName": file.name, "Type": file.isDirectory ? 1 : 0,
+                    "Size": file.size, "S3KeyFlag": metadata["s3"] ?? "", "Etag": metadata["etag"] ?? ""]], "operation": true, "event": "intoRecycle", "operatePlace": 1, "safeBox": false]
+        case .save(let file, let share, let parent):
+            try await saveShare(file: file, share: share, parent: parent)
+            return
+        }
+        let data = try await request(path: path, body: body, authenticated: true, allowEmptyData: true)
+        if case .createFolder = operation {
+            let info = data["Info"] as? [String: Any] ?? [:]
+            let id = Self.string(info["FileId"]) ?? Self.string(data["FileId"]) ?? Self.string(data["fileId"]) ?? ""
+            guard !id.isEmpty, id != "0" else { throw CloudError.message("123 未确认创建文件夹，请刷新确认。") }
+        }
+    }
+    private func saveShare(file: CloudFile, share: CloudShare, parent: String) async throws {
+        guard share.provider == .pan123 else { throw CloudError.message("分享与当前平台不一致。") }
+        let metadata = try Self.metadata(file)
+        let s3 = metadata["s3"] ?? ""
+        let shareID = String(s3.split(separator: "-").first ?? "")
+        guard shareID.range(of: "^[0-9]{1,20}$", options: .regularExpression) != nil else { throw CloudError.message("123 分享缺少数值 ShareId，请重新解析。") }
+        let source = try Self.numericID(file.id)
+        let target = try Self.numericID(parent)
+        let record: [String: Any] = ["fileID": source, "fileId": source, "size": file.size, "etag": metadata["etag"] ?? "", "type": file.isDirectory ? 1 : 0,
+                                    "parentFileID": target, "parentFileId": target, "fileName": file.name, "driveID": 0, "driveId": 0,
+                                    "s3keyFlag": s3, "S3KeyFlag": s3, "StorageNode": metadata["storage"] ?? ""]
+        let host = shareID + ".mshare.123pan.cn"
+        let path = "/b/api/restful/goapi/v1/file/copy/save"
+        let data = try await request(host: host, path: path, body: ["fileList": [record], "shareKey": share.shareID, "sharePwd": share.passcode, "currentLevel": 1, "superAdmin": NSNull()], authenticated: true, sign: false)
+        guard let task = Self.string(data["taskID"]), let number = Int64(task), number > 0 else { throw CloudError.message("123 未返回转存任务，请刷新个人目录确认。") }
+        for _ in 0..<15 {
+            try await Task.sleep(for: .seconds(1))
+            let progress = try await request(host: host, path: path + "/get", query: ["taskID": task], authenticated: true, sign: false)
+            let state = (Self.string(progress["state"]) ?? "").lowercased()
+            if ["failed", "error"].contains(state) { throw CloudError.message("123 转存任务失败，请确认空间和权限。") }
+            if progress["finished"] as? Bool == true || Self.string(progress["status"]) == "2" || ["success", "done", "2"].contains(state) || !(Self.string(progress["newFileId"]) ?? "").isEmpty { return }
+        }
+        throw CloudError.message("123 转存仍在处理中或未返回明确完成状态，请刷新个人目录确认，避免重复提交。")
+    }
+    private static func numericID(_ value: String) throws -> Int64 {
+        guard value.range(of: "^[0-9]+$", options: .regularExpression) != nil, let id = Int64(value), id >= 0 else { throw CloudError.message("123 文件标识无效。") }
+        return id
+    }
+    private static func metadata(_ file: CloudFile) throws -> [String: String] {
+        guard let data = Data(base64Encoded: file.token), let metadata = try JSONSerialization.jsonObject(with: data) as? [String: String] else { throw CloudError.message("123 文件元信息缺失，请重新解析。") }
+        return metadata
+    }
     func list(share: CloudShare?, parent: String, page: Int) async throws -> [CloudFile] {
         guard page >= 1, page <= 200 else { throw CloudError.message("123 分页参数无效。") }
         if let share, share.provider != .pan123 { throw CloudError.message("分享与当前平台不一致。") }
@@ -162,7 +229,7 @@ final class Pan123Client {
         return nil
     }
     private func request(host: String = "yun.123pan.cn", path: String, query: [String: String] = [:], body: [String: Any]? = nil,
-                         authenticated: Bool = false, login: Bool = false, android: Bool = false) async throws -> [String: Any] {
+                         authenticated: Bool = false, login: Bool = false, android: Bool = false, sign: Bool = true, allowEmptyData: Bool = false) async throws -> [String: Any] {
         guard !authenticated || !token.isEmpty else { throw CloudError.message("123 取链或浏览个人盘需要登录，请到账号页登录或保存 JWT。") }
         var parts = URLComponents()
         parts.scheme = "https"; parts.host = host; parts.path = path
@@ -179,9 +246,11 @@ final class Pan123Client {
             request.setValue("https://user.123pan.cn/", forHTTPHeaderField: "Referer")
         }
         if authenticated {
-            let (key, value) = Pan123Signature.make(path: path)
             request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
-            request.setValue(key, forHTTPHeaderField: "auth-key"); request.setValue(value, forHTTPHeaderField: "auth-value")
+            if sign {
+                let (key, value) = Pan123Signature.make(path: path)
+                request.setValue(key, forHTTPHeaderField: "auth-key"); request.setValue(value, forHTTPHeaderField: "auth-value")
+            } else { request.setValue("Dart/3.12 (dart:io)", forHTTPHeaderField: "User-Agent") }
         }
         if android { request.setValue("android", forHTTPHeaderField: "platform"); request.setValue("39", forHTTPHeaderField: "app-version") }
         if let body {
@@ -201,8 +270,9 @@ final class Pan123Client {
             data.append(byte)
         }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (root["code"] as? NSNumber)?.intValue == (login ? 200 : 0),
-              let value = root["data"] as? [String: Any] else { throw CloudError.message(login ? "123 登录被拒绝，请检查账号密码并在官网完成必要验证。" : "123 拒绝请求，请检查分享、提取码、登录或下载限制。") }
-        return value
+              (root["code"] as? NSNumber)?.intValue == (login ? 200 : 0) else { throw CloudError.message(login ? "123 登录被拒绝，请检查账号密码并在官网完成必要验证。" : "123 拒绝请求，请检查分享、提取码、登录或下载限制。") }
+        if let value = root["data"] as? [String: Any] { return value }
+        if allowEmptyData { return [:] }
+        throw CloudError.message("123 未返回有效数据，请重新解析或刷新目录。")
     }
 }

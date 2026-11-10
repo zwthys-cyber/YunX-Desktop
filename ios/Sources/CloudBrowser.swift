@@ -70,7 +70,7 @@ struct CloudHomeScreen: View {
                 }
                 if let error { Section("提示") { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Text("当前接入夸克、UC、123、光鸭和蓝奏优享的目录与单文件取链。支持递归批量下载（最多 500 文件/100 目录）；光鸭和蓝奏优享支持长按文件管理，其他平台仍在移植。")
+                    Text("当前接入夸克、UC、123、光鸭和蓝奏优享的目录、取链与长按文件管理。支持递归批量下载（最多 500 文件/100 目录）；其他平台仍在移植。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
@@ -126,8 +126,10 @@ final class CloudBrowserModel: ObservableObject {
         do {
             try await client.mutate(operation)
             message = "操作完成。"
-        } catch is CancellationError { message = "已停止等待；服务端操作可能已提交，请刷新目录确认。" }
-        catch { failure = error.localizedDescription }
+        } catch {
+            if Task.isCancelled || error is CancellationError { message = "已停止等待；服务端操作可能已提交，请刷新目录确认。" }
+            else { failure = error is CloudError ? error.localizedDescription : "平台操作失败，请检查网络并刷新目录确认。" }
+        }
         busy = false
         if failure == nil && !Task.isCancelled { await reload() }
     }

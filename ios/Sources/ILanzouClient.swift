@@ -174,8 +174,7 @@ final class ILanzouClient {
         }
     }
     private static func validateName(_ name: String) throws {
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name != ".", name != "..", name.utf8.count <= 255,
-              !name.contains("/"), !name.contains("\\"), !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { throw CloudError.message("文件名称为空、过长或含无效字符。") }
+        try CloudNamePolicy.validate(name)
     }
     private struct Result { let json: [String: Any]; let location: String? }
     private func request(_ path: String, share: CloudShare? = nil, authenticated: Bool = false, parameters: [String: String] = [:], body: [String: Any]? = nil, extra: Bool = true, timestamp: String? = nil, allowLocation: Bool = false) async throws -> Result {

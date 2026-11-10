@@ -92,3 +92,63 @@ final class Pan123Tests: XCTestCase {
         } catch { XCTAssertFalse(error.localizedDescription.contains("test-secret-token")) }
     }
 }
+
+private final class Pan123MutationPolls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; value += 1; return value }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+}
+
+extension Pan123Tests {
+    func testShareTransferUsesNumericOfficialSubdomainWithoutClientSignature() async throws {
+        let polls = Pan123MutationPolls()
+        MediaMockProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "1816216065.mshare.123pan.cn")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-account")
+            XCTAssertNil(request.value(forHTTPHeaderField: "auth-key"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "auth-value"))
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "loginuuid"))
+            if request.httpMethod == "POST" {
+                let body = try Self.body(request)
+                XCTAssertEqual(body["shareKey"] as? String, "share-key")
+                XCTAssertEqual(body["sharePwd"] as? String, "")
+                let file = try XCTUnwrap((body["fileList"] as? [[String: Any]])?.first)
+                XCTAssertEqual(file["fileID"] as? Int, 7)
+                XCTAssertEqual(file["fileId"] as? Int, 7)
+                XCTAssertEqual(file["parentFileId"] as? Int, 8)
+                XCTAssertEqual(file["S3KeyFlag"] as? String, "1816216065-0")
+                return (200, [:], ["code": 0, "data": ["taskID": 99]])
+            }
+            // Ambiguous status 3 alone must not be reported as complete.
+            return (200, [:], ["code": 0, "data": ["status": polls.next() == 1 ? 3 : 2]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let metadata = try JSONSerialization.data(withJSONObject: ["s3": "1816216065-0", "etag": "test-etag", "storage": "node"]).base64EncodedString()
+        let file = CloudFile(id: "7", name: "fixture.bin", size: 10, isDirectory: false, parentID: "0", token: metadata)
+        let client = CloudClient(provider: .pan123, cookie: "test-account", session: session())
+        try await client.mutate(.save(file: file, share: CloudShare(provider: .pan123, shareID: "share-key", passcode: ""), parent: "8"))
+        XCTAssertEqual(polls.count, 2)
+    }
+    func testCreateFolderSignsUploadRequestAndRenameAcceptsNullData() async throws {
+        MediaMockProtocol.handler = { request in
+            XCTAssertEqual(request.url?.host, "yun.123pan.cn")
+            XCTAssertNotNil(request.value(forHTTPHeaderField: "auth-key"))
+            let body = try Self.body(request)
+            if request.url?.path == "/b/api/file/upload_request" {
+                XCTAssertEqual(body["type"] as? Int, 1)
+                XCTAssertEqual(body["parentFileId"] as? Int, 0)
+                XCTAssertEqual(body["fileName"] as? String, "new folder")
+                XCTAssertEqual(body["NotReuse"] as? Bool, true)
+                return (200, [:], ["code": 0, "data": ["Info": ["FileId": 10]]])
+            }
+            XCTAssertEqual(request.url?.path, "/b/api/file/rename")
+            XCTAssertEqual(body["fileName"] as? String, "new.bin")
+            return (200, [:], ["code": 0, "data": NSNull()])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = CloudClient(provider: .pan123, cookie: "test-account", session: session())
+        try await client.mutate(.createFolder(name: "new folder", parent: "0"))
+        try await client.mutate(.rename(file: CloudFile(id: "7", name: "old.bin", size: 10, isDirectory: false, parentID: "0", token: ""), name: "new.bin"))
+    }
+}
