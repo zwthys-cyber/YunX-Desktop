@@ -56,6 +56,7 @@ enum LivePhotoAssembly {
             try await writeMovie(video, output: movieOutput, identifier: identifier)
             try Task.checkCancellation()
             _ = try await preview(photo: photoOutput, movie: movieOutput)
+            try Task.checkCancellation()
         } catch {
             try? FileManager.default.removeItem(at: photoOutput); try? FileManager.default.removeItem(at: movieOutput); throw error
         }
