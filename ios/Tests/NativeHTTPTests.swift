@@ -1,87 +1,117 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import XCTest
 import CryptoKit
-import Network
+import Darwin
 @testable import YunX
 
 private final class NativeHTTPFixture {
-    private let listener: NWListener
-    private let queue = DispatchQueue(label: "YunX.Tests.HTTP")
+    private let listener: Int32
     private let data: Data
+    private let lock = NSLock()
+    private var stopped = false
     private var starts: [Int] = []
-    private var clients: [NWConnection] = []
+    private var clients = Set<Int32>()
+    private let port: UInt16
     init(data: Data) throws {
         self.data = data
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-        listener = try NWListener(using: parameters)
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { throw CloudError.message("Fixture socket failed") }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        address.sin_port = 0
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, Darwin.listen(socket, 32) == 0 else { Darwin.close(socket); throw CloudError.message("Fixture bind failed") }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.getsockname(socket, $0, &length) }
+        }
+        guard named == 0 else { Darwin.close(socket); throw CloudError.message("Fixture port failed") }
+        listener = socket
+        port = UInt16(bigEndian: address.sin_port)
     }
     func start() async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            var resumed = false
-            listener.stateUpdateHandler = { [weak self] state in
-                guard !resumed, let self else { return }
-                switch state {
-                case .ready:
-                    resumed = true
-                    continuation.resume(returning: URL(string: "http://127.0.0.1:\(self.listener.port!.rawValue)/fixture.bin")!)
-                case .failed(let error): resumed = true; continuation.resume(throwing: error)
-                default: break
-                }
+        DispatchQueue.global(qos: .utility).async { [self] in
+            while true {
+                let client = Darwin.accept(listener, nil, nil)
+                if client < 0 { return }
+                lock.lock()
+                if stopped { lock.unlock(); Darwin.close(client); return }
+                clients.insert(client)
+                lock.unlock()
+                var enabled: Int32 = 1
+                _ = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
+                DispatchQueue.global(qos: .utility).async { [self] in serve(client) }
             }
-            listener.newConnectionHandler = { [weak self] connection in
-                guard let self else { connection.cancel(); return }
-                self.clients.append(connection)
-                connection.start(queue: self.queue)
-                self.read(connection, input: Data())
-            }
-            listener.start(queue: queue)
+        }
+        return URL(string: "http://127.0.0.1:\(port)/fixture.bin")!
+    }
+    private func serve(_ socket: Int32) {
+        defer {
+            lock.lock(); clients.remove(socket); lock.unlock()
+            Darwin.shutdown(socket, SHUT_WR)
+            Darwin.close(socket)
+        }
+        var input = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while input.range(of: Data("\r\n\r\n".utf8)) == nil {
+            let received = Darwin.recv(socket, &buffer, buffer.count, 0)
+            guard received > 0 else { return }
+            input.append(contentsOf: buffer.prefix(received))
+            guard input.count <= 16_384 else { return }
+        }
+        let text = String(decoding: input, as: UTF8.self)
+        var start = 0
+        var end = data.count - 1
+        var partial = false
+        if let range = text.components(separatedBy: "\r\n").first(where: { $0.lowercased().hasPrefix("range:") }) {
+            let value = range.components(separatedBy: "bytes=").last ?? ""
+            let values = value.split(separator: "-", omittingEmptySubsequences: false)
+            guard values.count == 2, let offset = Int(values[0]), offset >= 0, offset < data.count else { return }
+            start = offset; end = min(data.count - 1, Int(values[1]) ?? end); partial = true
+            lock.lock(); starts.append(start); lock.unlock()
+        }
+        guard end >= start else { return }
+        var head = "HTTP/1.1 \(partial ? 206 : 200) OK\r\nAccept-Ranges: bytes\r\nETag: \"yunx-test-fixture\"\r\nContent-Type: application/octet-stream\r\nContent-Length: \(end - start + 1)\r\nConnection: close\r\n"
+        if partial { head += "Content-Range: bytes \(start)-\(end)/\(data.count)\r\n" }
+        guard write(Data((head + "\r\n").utf8), socket: socket) else { return }
+        if text.hasPrefix("HEAD ") { return }
+        var offset = start
+        while offset <= end {
+            let next = min(end + 1, offset + 65_536)
+            guard write(data.subdata(in: offset..<next), socket: socket) else { return }
+            offset = next
+            // Keep the first connection slow enough to exercise nonzero Range workers.
+            if start == 0 { Thread.sleep(forTimeInterval: 0.005) }
         }
     }
-    private func read(_ connection: NWConnection, input: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] part, _, ended, error in
-            guard let self, error == nil else { connection.cancel(); return }
-            let input = input + (part ?? Data())
-            guard input.count <= 16_384 else { connection.cancel(); return }
-            guard input.range(of: Data("\r\n\r\n".utf8)) != nil else {
-                if ended { connection.cancel() } else { self.read(connection, input: input) }
-                return
+    private func write(_ bytes: Data, socket: Int32) -> Bool {
+        bytes.withUnsafeBytes { buffer in
+            var offset = 0
+            while offset < buffer.count {
+                let written = Darwin.send(socket, buffer.baseAddress!.advanced(by: offset), buffer.count - offset, 0)
+                if written <= 0 { return false }
+                offset += written
             }
-            let text = String(decoding: input, as: UTF8.self)
-            var start = 0
-            var end = self.data.count - 1
-            var partial = false
-            if let range = text.components(separatedBy: "\r\n").first(where: { $0.lowercased().hasPrefix("range:") }) {
-                let value = range.components(separatedBy: "bytes=").last ?? ""
-                let values = value.split(separator: "-", omittingEmptySubsequences: false)
-                if values.count == 2, let offset = Int(values[0]), offset >= 0, offset < self.data.count {
-                    start = offset; end = min(self.data.count - 1, Int(values[1]) ?? end); partial = true
-                    self.starts.append(start)
-                }
-            }
-            guard end >= start else { connection.cancel(); return }
-            var head = "HTTP/1.1 \(partial ? 206 : 200) OK\r\nAccept-Ranges: bytes\r\nETag: \"yunx-test-fixture\"\r\nContent-Type: application/octet-stream\r\nContent-Length: \(end - start + 1)\r\nConnection: close\r\n"
-            if partial { head += "Content-Range: bytes \(start)-\(end)/\(self.data.count)\r\n" }
-            let body = text.hasPrefix("HEAD ") ? Data() : self.data.subdata(in: start..<(end + 1))
-            connection.send(content: Data((head + "\r\n").utf8), contentContext: body.isEmpty ? .finalMessage : .defaultMessage, isComplete: body.isEmpty, completion: .contentProcessed { error in
-                guard error == nil else { connection.cancel(); return }
-                if body.isEmpty { return }
-                else if start == 0 { self.stream(body, offset: 0, connection: connection) }
-                else { connection.send(content: body, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in if error != nil { connection.cancel() } }) }
-            })
+            return true
         }
     }
-    private func stream(_ body: Data, offset: Int, connection: NWConnection) {
-        let end = min(body.count, offset + 65_536)
-        let last = end == body.count
-        connection.send(content: body.subdata(in: offset..<end), contentContext: last ? .finalMessage : .defaultMessage,
-                        isComplete: last, completion: .contentProcessed { [weak self] error in
-            guard error == nil, let self else { connection.cancel(); return }
-            if !last { self.queue.asyncAfter(deadline: .now() + .milliseconds(5)) { self.stream(body, offset: end, connection: connection) } }
-        })
+    func stop() {
+        lock.lock()
+        guard !stopped else { lock.unlock(); return }
+        stopped = true
+        for client in clients { Darwin.shutdown(client, SHUT_RDWR) }
+        lock.unlock()
+        Darwin.shutdown(listener, SHUT_RDWR)
+        Darwin.close(listener)
     }
-    func stop() { queue.sync { listener.cancel(); clients.forEach { $0.cancel() }; clients.removeAll() } }
-    var usedNonzeroRange: Bool { queue.sync { starts.contains { $0 > 0 } } }
+    var usedNonzeroRange: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return starts.contains { $0 > 0 }
+    }
 }
 
 @MainActor
@@ -109,19 +139,22 @@ final class NativeHTTPTests: XCTestCase {
             let id = try XCTUnwrap(JSONDecoder().decode(EngineEnvelope<String>.self, from: created).data)
             do {
                 var terminal: EngineTask?
+                var last: EngineTask?
                 let deadline = Date().addingTimeInterval(45)
                 while Date() < deadline {
                     let tasks = try await NativeEngine.shared.tasks()
-                    if let task = tasks.first(where: { $0.id == id }), ["done", "error"].contains(task.status) { terminal = task; break }
+                    last = tasks.first(where: { $0.id == id })
+                    if let task = last, ["done", "error"].contains(task.status) { terminal = task; break }
                     try await Task.sleep(for: .milliseconds(100))
                 }
-                let task = try XCTUnwrap(terminal, "Native fixture download timed out")
+                let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                let log = (try? Data(contentsOf: support.appendingPathComponent("YunX/Engine/logs/core.log"))) ?? Data()
+                let details = String(decoding: log.suffix(16_384), as: UTF8.self)
+                let task = try XCTUnwrap(terminal, "Native fixture timeout: state=\(last?.status ?? "missing"), received=\(last?.progress?.downloaded ?? -1). " + details)
                 if expected == digest {
                     if task.status != "done" {
                         // Test sandbox contains synthetic fixtures only, never real account requests.
-                        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                        let log = (try? Data(contentsOf: support.appendingPathComponent("YunX/Engine/logs/core.log"))) ?? Data()
-                        XCTFail("Native fixture failed: " + String(decoding: log.suffix(16_384), as: UTF8.self))
+                        XCTFail("Native fixture failed: " + details)
                     }
                     let file = try XCTUnwrap(NativeEngine.shared.completedFiles(task).first)
                     XCTAssertEqual(try Data(contentsOf: file), content)

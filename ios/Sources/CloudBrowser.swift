@@ -70,7 +70,7 @@ struct CloudHomeScreen: View {
                 }
                 if let error { Section("提示") { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Text("当前接入夸克、UC、123 和光鸭的目录与单文件取链。支持当前文件夹递归批量下载（最多 500 文件/100 目录）；转存管理及其他平台仍在移植。")
+                    Text("当前接入夸克、UC、123、光鸭和蓝奏优享的目录与单文件取链。支持递归批量下载（最多 500 文件/100 目录）；光鸭和蓝奏优享支持长按文件管理，其他平台仍在移植。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
@@ -228,7 +228,7 @@ struct CloudBrowserScreen: View {
                         Button("返回上级") { action = Task { await model.back() } }.disabled(model.busy)
                     }
                     Button("下载此目录（含子目录）") { confirmBatch = true }.disabled(model.busy)
-                    if route.provider == .guangya, route.share == nil, route.account != nil {
+                    if route.provider.supportsManagement, route.share == nil, route.account != nil {
                         Button("新建文件夹") { renameFile = nil; name = ""; showName = true }.disabled(model.busy)
                     }
                     if model.busy {
@@ -263,7 +263,7 @@ struct CloudBrowserScreen: View {
                             }
                         }
                         .contextMenu {
-                            if route.provider == .guangya, route.account != nil {
+                            if route.provider.supportsManagement, route.account != nil {
                                 if route.share == nil {
                                     Button("重命名") { renameFile = file; name = file.name; showName = true }
                                     Button("移动到…") { destinationFile = file }
@@ -293,7 +293,7 @@ struct CloudBrowserScreen: View {
                     action = Task { await model.manage(operation) }
                 }
             }
-            .confirmationDialog("从光鸭个人网盘删除所选文件或文件夹？", isPresented: Binding(get: { deleteFile != nil }, set: { if !$0 { deleteFile = nil } }), titleVisibility: .visible, presenting: deleteFile) { file in
+            .confirmationDialog("从\(route.provider.rawValue)个人网盘删除所选文件或文件夹？", isPresented: Binding(get: { deleteFile != nil }, set: { if !$0 { deleteFile = nil } }), titleVisibility: .visible, presenting: deleteFile) { file in
                 Button("删除 \(file.name)", role: .destructive) { action = Task { await model.manage(.trash(file: file)) }; deleteFile = nil }
             }
             .sheet(item: $destinationFile) { file in
@@ -323,7 +323,8 @@ struct CloudDestinationScreen: View {
     @Environment(\.dismiss) private var dismiss
     init(route: CloudRoute, vault: CredentialVault, excludedID: String?, selected: @escaping (String) -> Void) {
         self.excludedID = excludedID; self.selected = selected
-        client = CloudClient(provider: route.provider, cookie: route.account?.secret ?? "", fields: route.account?.backupFields ?? [:], credentialChanged: { [weak vault] token, fields in
+        let current = route.account.flatMap { saved in vault.accounts.first { $0.id == saved.id } }
+        client = CloudClient(provider: route.provider, cookie: current?.secret ?? "", fields: current?.backupFields ?? [:], credentialChanged: { [weak vault] token, fields in
             guard let id = route.account?.id else { return false }
             return vault?.updateCredential(id, secret: token, fields: fields) == true
         })
