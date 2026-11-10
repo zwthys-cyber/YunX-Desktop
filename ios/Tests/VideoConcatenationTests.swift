@@ -7,13 +7,21 @@ final class VideoConcatenationTests: XCTestCase {
     private func fixture(_ name: String) throws -> URL { try XCTUnwrap(Bundle(for: VideoConcatenationTests.self).url(forResource: name, withExtension: "mp4")) }
     private func frameCount(_ url: URL) async throws -> Int {
         let asset = AVURLAsset(url: url), track = try await asset.loadTracks(withMediaType: .video).first
-        let reader = try AVAssetReader(asset: asset), output = AVAssetReaderTrackOutput(track: try XCTUnwrap(track), outputSettings: nil)
+        let video = try XCTUnwrap(track), range = try await video.load(.timeRange)
+        let reader = try AVAssetReader(asset: asset), output = AVAssetReaderTrackOutput(track: video, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        reader.timeRange = range
         reader.add(output); XCTAssertTrue(reader.startReading())
         var count = 0
-        while output.copyNextSampleBuffer() != nil { count += 1 }
+        var times: [Double] = []
+        while let sample = output.copyNextSampleBuffer() {
+            let time = CMSampleBufferGetPresentationTimeStamp(sample)
+            times.append(CMTimeGetSeconds(time))
+            if CMTimeCompare(time, range.start) >= 0, CMTimeCompare(time, CMTimeRangeGetEnd(range)) < 0 { count += 1 }
+        }
+        print("Synthetic decoded video timeline: start=\(CMTimeGetSeconds(range.start)), duration=\(CMTimeGetSeconds(range.duration)), pts=\(times), displayed=\(count)")
         XCTAssertEqual(reader.status, .completed); return count
     }
-    func testRealH264SegmentsKeepAllSamplesAndDoubleDuration() async throws {
+    func testRealH264SegmentsKeepAllDisplayedFramesAndDoubleDuration() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let source = try fixture("synthetic-video"), output = folder.appendingPathComponent("joined.mp4")
