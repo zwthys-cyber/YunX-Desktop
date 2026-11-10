@@ -62,18 +62,6 @@ jobs:
           yunx_toolchain_key="$({ xcodebuild -version; go version; xcrun --sdk iphoneos --show-sdk-version; xcrun --sdk iphonesimulator --show-sdk-version; } | shasum -a 256 | cut -d ' ' -f 1)"
           echo "key=$yunx_toolchain_key" >> "$GITHUB_OUTPUT"
 
-      - name: Restore Go dependency and compiler cache
-        id: go-engine-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/Library/Caches/go-build
-          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-${{ github.run_id }}
-          restore-keys: |
-            go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-
-            go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-
-
       - name: Restore native iOS engine
         id: engine-cache
         uses: actions/cache/restore@v4
@@ -83,6 +71,19 @@ jobs:
             ios/build/YunX-Gopeed-corresponding-source.tar.gz
             ios/build/engine-source-revisions.txt
           key: yunx-engine-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}
+
+      - name: Restore Go dependency and compiler cache
+        id: go-engine-cache
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-${{ github.run_id }}
+          restore-keys: |
+            go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh') }}-
+            go-ios-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-
 
       - name: Build native Gopeed XCFramework
         id: engine-build
