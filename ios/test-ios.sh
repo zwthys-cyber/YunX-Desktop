@@ -64,36 +64,28 @@ PY
 xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath "$PWD/build/SimulatorDerivedData" \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build-for-testing
-# Security.framework needs a signed simulator host with an application identity.
-# This is a temporary simulator signature, independent of any Apple account.
+  CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build-for-testing
+# Let Xcode generate the simulator-specific entitlements and Mach-O metadata;
+# copying device/TrollStore entitlements into a manual signature is insufficient.
 simulator_app="$PWD/build/SimulatorDerivedData/Build/Products/Debug-iphonesimulator/YunX.app"
-python3 - <<'PY'
-import plistlib
-from pathlib import Path
-value = plistlib.loads(Path("TrollStore.entitlements").read_bytes())
-value["get-task-allow"] = True
-value["com.apple.developer.team-identifier"] = "YUNXLOCAL"
-Path("build/Simulator.entitlements").write_bytes(plistlib.dumps(value))
-PY
-while IFS= read -r -d '' library; do
-  /usr/bin/codesign --force --sign - --timestamp=none "$library"
-done < <(find "$simulator_app" -type f -name '*.dylib' -print0)
-for test_bundle in "$simulator_app"/PlugIns/*.xctest; do
-  if [ -d "$test_bundle" ]; then /usr/bin/codesign --force --sign - --timestamp=none "$test_bundle"; fi
-done
-/usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements ShareExtension/TrollStore.entitlements "$simulator_app/PlugIns/YunXShare.appex"
-/usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements build/Simulator.entitlements "$simulator_app"
 /usr/bin/codesign --verify --strict "$simulator_app"
+/usr/bin/codesign --display --entitlements - "$simulator_app"
 }
 run_tests() {
 simulator_id="$(cat build/simulator-id.txt)"
-xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Debug \
+if ! xcodebuild -project YunX.xcodeproj -scheme YunX -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath "$PWD/build/SimulatorDerivedData" \
   -resultBundlePath "$PWD/build/TestResults.xcresult" \
   -test-timeouts-enabled YES -default-test-execution-time-allowance 60 -maximum-test-execution-time-allowance 120 \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test-without-building
+  CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= test-without-building; then
+  # Preserve the OS reason when XCTest cannot launch; generic error 162 alone
+  # cannot distinguish a dyld failure from an invalid simulator signature.
+  xcrun simctl spawn "$simulator_id" log show --last 5m --style compact \
+    --predicate 'process == "amfid" OR process == "taskgated-helper" OR eventMessage CONTAINS[c] "code signature" OR eventMessage CONTAINS[c] "YunX"' \
+    2>&1 | tail -n 180 || true
+  exit 1
+fi
 # Decode an actual iOS-encrypted synthetic fixture with the independent desktop JCE code.
 app_data="$(xcrun simctl get_app_container "$simulator_id" io.github.zwthys.yunx data)"
 backup_fixture="$app_data/Documents/BackupInterop/ios-export-v2.yunx"

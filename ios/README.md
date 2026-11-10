@@ -6,7 +6,7 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 最后完整成功的基线为 `75ec0d5`：148 项模拟器测试、独立 Java 对 iOS 加密备份的反向解密、主应用与分享扩展设备编译及 IPA 打包成功。
 
-后续加入代理、统一调度、自动重试、目录迁移等功能。`f8b2dd9` 已运行 168 项测试，出现 16 处失败，日志包含未签名模拟器宿主的钥匙串访问错误。`2bb9049` 补充模拟器临时签名，并将编译与执行测试拆成独立步骤；结果以对应 [GitHub Actions](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port) 记录为准。新增功能未全部通过同一轮回归前，不能用旧版成功记录代表当前分支已通过。
+后续加入代理、统一调度、自动重试、目录迁移等功能。`f8b2dd9` 已运行 168 项测试，出现 16 处失败，日志包含未签名模拟器宿主的钥匙串访问错误。`2bb9049` 的手工签名通过结构检查，但模拟器拒绝启动宿主，未实际运行测试；后续改用 Xcode 标准模拟器签名。结果以对应 [GitHub Actions](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port) 记录为准。新增功能未全部通过同一轮回归前，不能用旧版成功记录代表当前分支已通过。
 
 当前没有真实平台账号、iOS 17 设备安装或 TrollStore 共享容器验收记录。确定性的接口用例及较新 iOS 模拟器测试不能替代这些结果。早期失败与修复过程可查 Git 历史和 Actions，本页描述当前实现及其限制。
 
