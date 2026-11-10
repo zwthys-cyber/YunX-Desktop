@@ -42,6 +42,12 @@ final class ILanzouClient {
     private var uuid: String
     private var userID: String
     private var finalPages: [String: Int] = [:]
+    func hasMore(share: CloudShare?, parent: String, page: Int, count: Int) -> Bool {
+        guard let parent = try? ILanzouProtocol.rawID(parent) else { return false }
+        let key = (share?.shareID ?? "personal") + "|" + parent
+        if let last = finalPages[key] { return page < last }
+        return count >= 60
+    }
     private static let site = "https://www.ilanzou.com"
     private static let agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     init(token: String = "", fields: [String: String] = [:], session: URLSession) {

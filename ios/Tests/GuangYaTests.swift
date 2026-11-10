@@ -71,8 +71,12 @@ final class GuangYaTests: XCTestCase {
         defer { MediaMockProtocol.handler = nil }
         let client = CloudClient(provider: .guangya, cookie: "account-secret", session: session())
         let share = CloudShare(provider: .guangya, shareID: "share", passcode: "1234")
-        let first = try await client.list(share: share)
-        let second = try await client.list(share: share, page: 2)
+        let firstPage = try await client.listPage(share: share)
+        let first = firstPage.files
+        let secondPage = try await client.listPage(share: share, page: 2)
+        let second = secondPage.files
+        XCTAssertTrue(firstPage.hasMore)
+        XCTAssertFalse(secondPage.hasMore)
         let end = try await client.list(share: share, page: 3)
         XCTAssertEqual(second.first?.id, "2"); XCTAssertTrue(end.isEmpty)
         let download = try await client.download(file: XCTUnwrap(first.first), share: share)

@@ -83,6 +83,20 @@ final class Pan123Tests: XCTestCase {
         XCTAssertNil(download.headers["Authorization"])
         XCTAssertNil(download.headers["Cookie"])
     }
+    func testShortPagesRetainExplicitNextCursor() async throws {
+        MediaMockProtocol.handler = { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let second = query.first(where: { $0.name == "Page" })?.value == "2"
+            return (200, [:], ["code": 0, "data": ["Next": second ? "-1" : "next", "InfoList": [["FileId": second ? "2" : "1", "FileName": "fixture.bin", "Size": 10, "Type": 0, "Etag": "etag"]]]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = CloudClient(provider: .pan123, session: session())
+        let share = CloudShare(provider: .pan123, shareID: "share", passcode: "")
+        let first = try await client.listPage(share: share)
+        let second = try await client.listPage(share: share, page: 2)
+        XCTAssertEqual(first.files.count, 1); XCTAssertTrue(first.hasMore)
+        XCTAssertEqual(second.files.count, 1); XCTAssertFalse(second.hasMore)
+    }
     func testPlatformErrorDoesNotEchoCredentials() async throws {
         MediaMockProtocol.handler = { _ in (200, [:], ["code": 401, "message": "test-secret-token", "data": [:]]) }
         defer { MediaMockProtocol.handler = nil }

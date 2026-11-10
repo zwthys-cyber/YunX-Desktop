@@ -9,18 +9,19 @@ struct YunXApp: App {
     @StateObject private var vault = CredentialVault()
     @StateObject private var library = LinkLibrary()
     @StateObject private var assemblies = MediaAssemblyStore()
+    @StateObject private var navigation = AppNavigation.shared
     @AppStorage("appearance") private var appearance = "system"
     @AppStorage("accentRGB") private var accent = ThemeColor.initial
 
     var body: some Scene {
         WindowGroup {
-            TabView {
+            TabView(selection: $navigation.selectedTab) {
                 CloudHomeScreen(vault: vault, downloads: downloads)
-                    .tabItem { Label("网盘", systemImage: "externaldrive") }
+                    .tabItem { Label("网盘", systemImage: "externaldrive") }.tag(0)
                 MediaScreen(vault: vault, downloads: downloads)
-                    .tabItem { Label("视频与图集", systemImage: "play.rectangle") }
+                    .tabItem { Label("视频与图集", systemImage: "play.rectangle") }.tag(1)
                 DownloadScreen(store: downloads)
-                    .tabItem { Label("下载", systemImage: "arrow.down.circle") }
+                    .tabItem { Label("下载", systemImage: "arrow.down.circle") }.tag(2)
                 NavigationStack {
                     List {
                         NavigationLink("P2P 下载引擎") { P2PScreen() }
@@ -29,9 +30,9 @@ struct YunXApp: App {
                         NavigationLink("设置与收藏") { SettingsScreen(downloads: downloads) }
                         NavigationLink("诊断") { DiagnosticsScreen() }
                     }.navigationTitle("我的")
-                }.tabItem { Label("我的", systemImage: "person.crop.circle") }
+                }.tabItem { Label("我的", systemImage: "person.crop.circle") }.tag(3)
                 GitHubScreen(vault: vault, downloads: downloads)
-                    .tabItem { Label("GitHub", systemImage: "shippingbox") }
+                    .tabItem { Label("GitHub", systemImage: "shippingbox") }.tag(4)
             }
             .environmentObject(library)
             .environmentObject(assemblies)

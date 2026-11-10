@@ -30,4 +30,16 @@ final class CloudFolderTests: XCTestCase {
             XCTFail("Expected duplicate page rejection")
         } catch { XCTAssertTrue(error.localizedDescription.contains("分页重复")) }
     }
+    func testShortPageWithExplicitContinuationIsNotTruncated() async throws {
+        let files = try await CloudFolderCollector().collectPages(rootID: "0") { _, page in
+            CloudPage(files: [self.file(page == 1 ? "a" : "b")], hasMore: page == 1)
+        }
+        XCTAssertEqual(files.map { $0.file.id }, ["a", "b"])
+    }
+    func testEmptyContinuationPageIsRejectedInsteadOfClaimingComplete() async throws {
+        do {
+            _ = try await CloudFolderCollector().collectPages(rootID: "0") { _, _ in CloudPage(files: [], hasMore: true) }
+            XCTFail("Empty continuation must not complete a batch")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("分页重复")) }
+    }
 }

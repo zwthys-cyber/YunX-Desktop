@@ -102,4 +102,16 @@ final class ILanzouTests: XCTestCase {
         do { try await client.mutate(.move(file: folder, parent: "d:7")); XCTFail("Self move must be rejected") }
         catch { XCTAssertTrue(error.localizedDescription.contains("自身")) }
     }
+    func testShortPersonalPageUsesReportedTotalPage() async throws {
+        MediaMockProtocol.handler = { request in
+            let page = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems?.first(where: { $0.name == "offset" })?.value ?? "1"
+            return (200, [:], ["code": 200, "totalPage": 2, "list": [["fileType": 1, "fileId": page, "fileName": "fixture.bin", "fileSize": 1]]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = CloudClient(provider: .ilanzou, cookie: fixtureToken, fields: ["uuid": "fixture_uuid_123"], session: session())
+        let first = try await client.listPage(share: nil)
+        let second = try await client.listPage(share: nil, page: 2)
+        XCTAssertTrue(first.hasMore); XCTAssertFalse(second.hasMore)
+        XCTAssertEqual(first.files.count, 1); XCTAssertEqual(second.files.first?.id, "f:2")
+    }
 }

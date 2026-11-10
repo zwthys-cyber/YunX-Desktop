@@ -188,6 +188,12 @@ private final class MutationPolls: @unchecked Sendable {
 }
 
 extension CloudDriveTests {
+    func testMalformedRowsAreNotSilentlyRemovedFromAPage() async throws {
+        CloudMockProtocol.handler = { _ in (200, [:], ["status": 200, "data": ["list": [["fid": "valid", "file_name": "valid.bin"], ["file_name": "missing-id.bin"]]]]) }
+        defer { CloudMockProtocol.handler = nil }
+        do { _ = try await client(.quark, cookie: "test-only-cookie=fixture").list(share: nil); XCTFail("Malformed row must reject the page") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("信息不完整")) }
+    }
     func testQuarkAndUCSaveUseFileTokensAndWaitForConfirmedCompletion() async throws {
         defer { CloudMockProtocol.handler = nil }
         for provider in [CloudProvider.quark, .uc] {

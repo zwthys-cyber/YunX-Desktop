@@ -47,6 +47,10 @@ final class Pan123Client {
     private let token: String
     private let device: String
     private var cursors: [String: [Int: String]] = [:]
+    func hasMore(share: CloudShare?, parent: String, page: Int) -> Bool {
+        let key = (share.map { $0.shareID + "|" + $0.passcode } ?? "personal") + "|" + parent
+        return cursors[key]?[page + 1] != nil
+    }
     init(token: String, session: URLSession) {
         self.token = token.hasPrefix("Bearer ") ? String(token.dropFirst(7)) : token
         self.session = session
@@ -158,6 +162,7 @@ final class Pan123Client {
         let data = try await request(path: path, query: query, authenticated: share == nil)
         guard data["Expired"] as? Bool != true else { throw CloudError.message("123 分享已失效。") }
         guard let records = data["InfoList"] as? [[String: Any]] else { throw CloudError.message("123 未返回文件列表。") }
+        cursors[key]?[page + 1] = nil
         if let next = data["Next"], String(describing: next) != "-1", !records.isEmpty {
             cursors[key]?[page + 1] = String(describing: next)
         }

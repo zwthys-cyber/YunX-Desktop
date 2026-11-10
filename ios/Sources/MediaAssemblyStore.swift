@@ -147,8 +147,10 @@ final class MediaAssemblyStore: ObservableObject {
             try FileManager.default.moveItem(at: scratch, to: destination)
             staging = nil
             jobs[final].filename = destination.lastPathComponent
-            jobs[final].state = .completed; jobs[final].error = nil; save()
+            jobs[final].state = .completed; jobs[final].error = nil
+            let persisted = save()
             await Diagnostics.shared.record(.assemblyCompleted)
+            if persisted { await DownloadNotifications.shared.completed() }
         } catch {
             if let staging { try? FileManager.default.removeItem(at: staging) }
             guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import Foundation
 import UIKit
+import UserNotifications
 
 enum BackgroundDownloadPolicy {
     static let identifier = "io.github.zwthys.yunx.downloads.v1"
@@ -36,6 +37,11 @@ enum BackgroundDownloadEvents {
 
 @MainActor
 final class YunXAppDelegate: NSObject, UIApplicationDelegate {
+    private let notificationDelegate = YunXNotificationDelegate()
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = notificationDelegate
+        return true
+    }
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
         guard identifier == BackgroundDownloadPolicy.identifier else { completionHandler(); return }
         BackgroundDownloadEvents.register(completionHandler)

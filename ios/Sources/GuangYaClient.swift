@@ -38,6 +38,13 @@ final class GuangYaClient {
     let device: GuangYaDevice
     private var shareTokens: [String: String] = [:]
     private var cursors: [String: [Int: String]] = [:]
+    private var morePages: [String: [Int: Bool]] = [:]
+    private var listedCounts: [String: [Int: Int64]] = [:]
+    func hasMore(share: CloudShare?, parent: String, page: Int) -> Bool {
+        let parent = parent == "0" ? "" : parent
+        let key = (share.map { $0.shareID + "|" + $0.passcode } ?? "personal") + "|" + parent
+        return morePages[key]?[page] ?? false
+    }
     private static let website = "https://www.guangyapan.com"
     private static let clientID = "aMe-8VSlkrbQXpUR"
     private static let agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -121,6 +128,7 @@ final class GuangYaClient {
         guard (1...200).contains(page) else { throw CloudError.message("光鸭分页参数无效。") }
         let parent = parent == "0" ? "" : parent
         let key = (share.map { $0.shareID + "|" + $0.passcode } ?? "personal") + "|" + parent
+        if page == 1 { morePages[key] = [:]; listedCounts[key] = [:] }
         var body: [String: Any] = ["parentId": parent, "pageSize": 100, "orderBy": 0, "sortType": 0]
         let path: String
         if let share {
@@ -139,6 +147,13 @@ final class GuangYaClient {
             let next = Self.string(data["cursor"])
             guard !next.isEmpty, next != body["cursor"] as? String else { throw CloudError.message("光鸭分页游标缺失或重复。") }
             cursors[key]?[page + 1] = next
+        }
+        if share != nil { morePages[key]?[page] = data["hasMore"] as? Bool == true }
+        else {
+            let count = (listedCounts[key]?[page - 1] ?? 0) + Int64(records.count)
+            listedCounts[key]?[page] = count
+            let total = Int64(Self.string(data["total"])) ?? 0
+            morePages[key]?[page] = data["hasMore"] as? Bool ?? (total > 0 ? count < total : records.count >= 100)
         }
         return try records.map { item in
             let id = Self.first(item, ["fileId", "file_id", "id", "resId", "resourceId"])

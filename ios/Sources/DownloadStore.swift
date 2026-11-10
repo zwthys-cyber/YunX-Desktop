@@ -53,6 +53,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private var backgroundSession: URLSession?
     private var restoringBackground = false
     private var restorableBackground = Set<UUID>()
+    private var notificationWork: [UUID: Task<Void, Never>] = [:]
     private let manager = FileManager.default
     private var unreadableIndex = false
 
@@ -324,7 +325,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
         guard let value = downloadTask.taskDescription, let id = UUID(uuidString: value),
-              !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
+              !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }), items[index].state != .completed else { return }
         guard let response = downloadTask.response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
             let status = (downloadTask.response as? HTTPURLResponse)?.statusCode
@@ -360,14 +361,20 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             items[index].received = (try destination.resourceValues(forKeys: [.fileSizeKey])).fileSize.map(Int64.init) ?? items[index].received
             try? manager.removeItem(at: resumeURL(id))
             DownloadHeaders.delete(id)
-            let size = items[index].received
-            Task { await Diagnostics.shared.record(.downloadCompleted, bytes: size) }
         } catch {
             items[index].state = .failed
             items[index].error = "无法保存文件：\(error.localizedDescription)"
             Task { await Diagnostics.shared.record(.downloadFailed) }
         }
-        save()
+        if save(), items[index].state == .completed {
+            let size = items[index].received
+            let notificationID = UUID()
+            notificationWork[notificationID] = Task { @MainActor [weak self] in
+                await Diagnostics.shared.record(.downloadCompleted, bytes: size)
+                await DownloadNotifications.shared.completed()
+                self?.notificationWork.removeValue(forKey: notificationID)
+            }
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
@@ -399,6 +406,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         active.removeValue(forKey: id)
         defer { drainQueue() }
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
+        if items[index].state == .completed { save(); return }
         if items[index].state == .pausing { return }
         if items[index].state == .paused, let cancellation = error as NSError?,
            cancellation.domain == NSURLErrorDomain, cancellation.code == NSURLErrorCancelled {
@@ -422,6 +430,10 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         guard session.configuration.identifier == BackgroundDownloadPolicy.identifier else { return }
-        Task { @MainActor in BackgroundDownloadEvents.finished() }
+        let notifications = Array(notificationWork.values)
+        Task { @MainActor in
+            for notification in notifications { await notification.value }
+            BackgroundDownloadEvents.finished()
+        }
     }
 }

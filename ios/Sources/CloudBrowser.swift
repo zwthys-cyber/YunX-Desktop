@@ -141,14 +141,16 @@ final class CloudBrowserModel: ObservableObject {
         failure = nil
         defer { busy = false }
         do {
-            let batch = try await client.list(share: share, parentID: folder.id, page: nextPage)
+            let result = try await client.listPage(share: share, parentID: folder.id, page: nextPage)
+            let batch = result.files
             try Task.checkCancellation()
             var known = nextPage == 1 ? Set<String>() : Set(files.map(\.id))
             let fresh = batch.filter { known.insert($0.id).inserted }
+            guard batch.isEmpty || !fresh.isEmpty else { throw CloudError.message("目录分页重复，已停止继续加载，请刷新后重试。") }
             files = nextPage == 1 ? fresh : files + fresh
             folders = path
             page = nextPage
-            canLoadMore = batch.count >= 50 && !fresh.isEmpty
+            canLoadMore = result.hasMore
         } catch is CancellationError { }
         catch { failure = error.localizedDescription }
     }
@@ -160,8 +162,8 @@ final class CloudBrowserModel: ObservableObject {
         var added = 0
         var failed = 0
         do {
-            let batch = try await CloudFolderCollector().collect(rootID: folder.id) { parent, page in
-                try await self.client.list(share: self.share, parentID: parent, page: page)
+            let batch = try await CloudFolderCollector().collectPages(rootID: folder.id) { parent, page in
+                try await self.client.listPage(share: self.share, parentID: parent, page: page)
             }
             for item in batch {
                 try Task.checkCancellation()
@@ -358,13 +360,14 @@ struct CloudDestinationScreen: View {
             var seen = Set<String>()
             var result: [CloudFile] = []
             for page in 1...200 {
-                let files = try await client.list(share: nil, parentID: parent, page: page)
+                let resultPage = try await client.listPage(share: nil, parentID: parent, page: page)
+                let files = resultPage.files
                 try Task.checkCancellation()
                 let fresh = files.filter { seen.insert($0.id).inserted }
                 if !files.isEmpty && fresh.isEmpty { throw CloudError.message("目录分页重复，请刷新后重试。") }
                 result.append(contentsOf: fresh.filter(\.isDirectory))
                 guard result.count <= 2000 else { throw CloudError.message("目标目录过多，请在官网整理后重试。") }
-                if files.count < 50 { directories = result; return }
+                if !resultPage.hasMore { directories = result; return }
             }
             throw CloudError.message("目录分页达到上限，请稍后重试。")
         } catch is CancellationError { }

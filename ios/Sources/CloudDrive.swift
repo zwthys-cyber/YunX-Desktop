@@ -84,6 +84,11 @@ struct CloudDownload {
     let headers: [String: String]
 }
 
+struct CloudPage {
+    let files: [CloudFile]
+    let hasMore: Bool
+}
+
 enum CloudError: LocalizedError {
     case message(String)
     var errorDescription: String? {
@@ -256,14 +261,28 @@ final class CloudClient {
                 ((data["detail_info"] as? [String: Any])?["list"] as? [[String: Any]]) else {
             throw CloudError.message("服务端未返回文件列表，可能需要更新平台适配。")
         }
-        return list.compactMap { item in
+        return try list.map { item in
             guard let id = item["fid"] as? String, !id.isEmpty,
-                  let name = (item["file_name"] as? String) ?? (item["fname"] as? String) else { return nil }
+                  let name = [item["file_name"], item["fname"]].compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) else { throw CloudError.message("平台文件条目信息不完整，已停止显示该页以免遗漏。") }
             let directory = (item["dir"] as? Bool) == true || (item["isdir"] as? NSNumber)?.intValue == 1
-            return CloudFile(id: id, name: name, size: (item["size"] as? NSNumber)?.int64Value ?? 0,
+            let rawSize = item["size"] ?? item["fsize"]
+            let size = (rawSize as? NSNumber)?.int64Value ?? Int64(rawSize as? String ?? "") ?? 0
+            guard size >= 0 else { throw CloudError.message("平台文件大小无效，已停止显示该页。") }
+            return CloudFile(id: id, name: name, size: size,
                              isDirectory: directory, parentID: item["pdir_fid"] as? String ?? parentID,
-                             token: item["share_fid_token"] as? String ?? "")
+                             token: item["share_fid_token"] as? String ?? item["fid_token"] as? String ?? "")
         }
+    }
+
+    func listPage(share: CloudShare?, parentID: String = "0", page: Int = 1) async throws -> CloudPage {
+        let files = try await list(share: share, parentID: parentID, page: page)
+        let more: Bool
+        if let pan123 { more = pan123.hasMore(share: share, parent: parentID, page: page) }
+        else if let guangya { more = guangya.hasMore(share: share, parent: parentID, page: page) }
+        else if let ilanzou { more = ilanzou.hasMore(share: share, parent: parentID, page: page, count: files.count) }
+        else { more = files.count >= 50 }
+        guard !more || !files.isEmpty else { throw CloudError.message("平台返回空页但仍声明有后续，已停止以免遗漏文件。") }
+        return CloudPage(files: files, hasMore: more)
     }
 
     func download(file: CloudFile, share: CloudShare?) async throws -> CloudDownload {

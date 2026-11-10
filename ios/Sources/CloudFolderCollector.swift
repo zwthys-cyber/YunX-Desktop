@@ -12,6 +12,12 @@ struct CloudFolderCollector {
     var folderLimit = 100
     var pageLimit = 200
     func collect(rootID: String, list: (String, Int) async throws -> [CloudFile]) async throws -> [CloudBatchFile] {
+        try await collectPages(rootID: rootID) { folder, page in
+            let files = try await list(folder, page)
+            return CloudPage(files: files, hasMore: files.count >= 50)
+        }
+    }
+    func collectPages(rootID: String, list: (String, Int) async throws -> CloudPage) async throws -> [CloudBatchFile] {
         var pending: [(String, [String])] = [(rootID, [])]
         var seenFolders: Set<String> = [rootID]
         var seenFiles = Set<String>()
@@ -26,7 +32,8 @@ struct CloudFolderCollector {
             while true {
                 try Task.checkCancellation()
                 guard page <= pageLimit else { throw CloudError.message("文件夹分页超过批量上限，请进入子目录分批下载。") }
-                let batch = try await list(folder, page)
+                let result = try await list(folder, page)
+                let batch = result.files
                 var fresh = 0
                 for file in batch where seenInFolder.insert(file.id).inserted {
                     fresh += 1
@@ -40,8 +47,8 @@ struct CloudFolderCollector {
                         output.append(CloudBatchFile(file: file, relativeFolders: path))
                     }
                 }
-                if batch.count < 50 { break }
-                guard fresh > 0 else { throw CloudError.message("平台分页重复，已停止批量操作，请刷新后重试。") }
+                guard fresh > 0 || (batch.isEmpty && !result.hasMore) else { throw CloudError.message("平台分页重复，已停止批量操作，请刷新后重试。") }
+                if !result.hasMore { break }
                 page += 1
             }
         }

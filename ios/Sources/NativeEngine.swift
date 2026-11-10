@@ -38,6 +38,8 @@ struct EngineTask: Decodable, Identifiable {
 actor NativeEngine {
     static let shared = NativeEngine()
     private var startup: Task<Void, Error>?
+    private var watchedCompletions = Set<String>()
+    private var completionMonitor: Task<Void, Never>?
     private let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX/Engine", isDirectory: true)
     nonisolated let downloads = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("P2P", isDirectory: true)
 
@@ -72,7 +74,7 @@ actor NativeEngine {
     func invoke(_ method: String, path: String, query: String = "", body: Data? = nil) async throws -> Data {
         try await ensureStarted()
         let encoded = body.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        return try await Task.detached(priority: .utility) {
+        let data = try await Task.detached(priority: .utility) {
             let response = YunxengineInvoke(method, path, query, encoded)
             guard let data = response.data(using: .utf8),
                   let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["code"] as? Int == 0 else {
@@ -81,6 +83,43 @@ actor NativeEngine {
             }
             return data
         }.value
+        if UserDefaults.standard.bool(forKey: DownloadNotifications.preferenceKey) {
+            if method == "POST", path == "/api/v1/tasks", let id = (try? JSONDecoder().decode(EngineEnvelope<String>.self, from: data))?.data {
+                watchedCompletions.insert(id)
+            } else if method == "PUT", path.hasSuffix("/continue") {
+                let parts = path.split(separator: "/")
+                if parts.count == 5 { watchedCompletions.insert(String(parts[3])) }
+            }
+            beginCompletionWatch()
+        }
+        return data
+    }
+    func watchCurrentCompletions() async {
+        guard startup != nil, UserDefaults.standard.bool(forKey: DownloadNotifications.preferenceKey), let current = try? await tasks() else { return }
+        watchedCompletions.formUnion(current.filter { ["ready", "wait", "running"].contains($0.status) }.map(\.id))
+        beginCompletionWatch()
+    }
+    private func beginCompletionWatch() {
+        guard completionMonitor == nil, !watchedCompletions.isEmpty else { return }
+        completionMonitor = Task {
+            while !Task.isCancelled, !watchedCompletions.isEmpty, UserDefaults.standard.bool(forKey: DownloadNotifications.preferenceKey) {
+                do {
+                    let current = try await tasks()
+                    for id in watchedCompletions {
+                        guard let task = current.first(where: { $0.id == id }) else { watchedCompletions.remove(id); continue }
+                        if task.meta?.req?.labels?["yunxAssembly"] != nil || ["error", "pause"].contains(task.status) {
+                            watchedCompletions.remove(id)
+                        } else if task.status == "done" {
+                            watchedCompletions.remove(id)
+                            if !completedFiles(task).isEmpty { await DownloadNotifications.shared.completed() }
+                        }
+                    }
+                } catch { /* A transient stats failure does not create a completion event. */ }
+                do { try await Task.sleep(for: .seconds(2)) } catch { break }
+            }
+            watchedCompletions.removeAll()
+            completionMonitor = nil
+        }
     }
     func managementServerRunning() -> Bool { YunxengineServerRunning() }
     func tasks() async throws -> [EngineTask] {
