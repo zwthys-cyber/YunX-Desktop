@@ -53,6 +53,7 @@ actor NativeEngine {
         guard !DownloadStorage.isMigrating else { throw DownloadStorageError.busy }
         try Self.applyHTTPBandwidthLimit(UserDefaults.standard.integer(forKey: "engineHTTPRateKiB"))
         try Self.applyHTTPTransport(NativeHTTPTransportPreference.load())
+        try Self.applyHTTPSlowPreference(NativeHTTPSlowPreference.load())
         _ = try NetworkProxy.current()
         let resolver = IOSProxyResolver()
         proxyResolver = resolver
@@ -119,6 +120,18 @@ actor NativeEngine {
         try Self.applyHTTPTransport(preference)
         UserDefaults.standard.set(preference.http2, forKey: "engineHTTP2")
         UserDefaults.standard.set(preference.bufferKiB, forKey: "engineHTTPBufferKiB")
+    }
+    private static func applyHTTPSlowPreference(_ preference: NativeHTTPSlowPreference) throws {
+        var error: NSError?
+        guard YunxengineSetNativeHTTPSlowConnections(preference.enabled, preference.minimumKiB, preference.seconds, &error) else {
+            throw CloudError.message("慢连接配置未应用。")
+        }
+    }
+    func setHTTPSlowPreference(_ preference: NativeHTTPSlowPreference) throws {
+        try Self.applyHTTPSlowPreference(preference)
+        UserDefaults.standard.set(preference.enabled, forKey: "engineHTTPSlowEnabled")
+        UserDefaults.standard.set(preference.minimumKiB, forKey: "engineHTTPSlowMinimumKiB")
+        UserDefaults.standard.set(preference.seconds, forKey: "engineHTTPSlowSeconds")
     }
     func refreshNetworkProxy(profile: NetworkProxyProfile? = nil, startIfNeeded: Bool = false) async throws {
         guard startup != nil || startIfNeeded else { return }

@@ -43,6 +43,7 @@ func SetGlobalDownloadLimit(limit int) { base.YunxSetDownloadLimit(max(1, min(6,
 func SetHTTPRestoring(value bool) { base.YunxSetHTTPRestoring(value) }
 func SetNativeHTTPBandwidthLimit(bytesPerSecond int64) error { return base.YunxSetNativeHTTPBandwidthLimit(bytesPerSecond) }
 func SetNativeHTTPTransport(http2 bool, bufferKiB int) error { return base.YunxSetNativeHTTPTransport(http2, bufferKiB) }
+func SetNativeHTTPSlowConnections(enabled bool, minimumKiB, seconds int) error { return base.YunxSetNativeHTTPSlowConnections(enabled, minimumKiB, seconds) }
 func AvailableDownloadSlots() int { return base.YunxAvailableSlots() }
 func AcquireHTTPTask(id string, adopt bool) bool {
     if id == "" || len(id) > 128 { return false }

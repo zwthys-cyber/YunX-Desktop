@@ -17,6 +17,12 @@ var yunxBandwidth struct {
     cancel context.CancelFunc
 }
 
+func YunxNativeHTTPBandwidthLimited() bool {
+    yunxBandwidth.RLock()
+    defer yunxBandwidth.RUnlock()
+    return yunxBandwidth.limiter != nil
+}
+
 // This budget is shared by native HTTP file readers, not by P2P or HLS.
 func YunxSetNativeHTTPBandwidthLimit(bytesPerSecond int64) error {
     if bytesPerSecond != 0 && (bytesPerSecond < 1024 || bytesPerSecond > 1<<30) {

@@ -23,7 +23,16 @@ func (f *Fetcher) responseReaderWithBudget(resp *http.Response, cancel context.C
         budgetContext = context.Background()
         if resp.Request != nil { budgetContext = resp.Request.Context() }
     }
-    return base.YunxNativeHTTPReader(budgetContext, NewTimeoutReader(resp.Body, readTimeout, cancel), stop)
+    reader := base.YunxNativeHTTPReader(budgetContext, NewTimeoutReader(resp.Body, readTimeout, cancel), stop)
+    f.connMu.Lock()
+    resumable := f.meta != nil && f.meta.Res != nil && f.meta.Res.Range && f.ifRange != "" && f.hasKnownSize()
+    f.connMu.Unlock()
+    if resumable {
+        responseContext := budgetContext
+        if resp.Request != nil { responseContext = resp.Request.Context() }
+        return base.YunxSlowNativeHTTPReader(responseContext, reader, cancel, stop)
+    }
+    return reader
 }'''
 if source.count(original) != 1 or source.count("reader := f.responseReader(resp, cancel)") != 2 or source.count("reader := f.responseReader(resp, reqCancel)") != 1:
     raise SystemExit("Pinned native HTTP bandwidth hook changed")
@@ -33,4 +42,8 @@ source = source.replace(original, replacement)
 source = source.replace("reader := f.responseReader(resp, cancel)", "reader := f.responseReaderWithBudget(resp, cancel, nil, f.prefetchStopCh)", 1)
 source = source.replace("reader := f.responseReader(resp, cancel)", "reader := f.responseReaderWithBudget(resp, cancel, conn.ctx, nil)", 1)
 source = source.replace("reader := f.responseReader(resp, reqCancel)", "reader := f.responseReaderWithBudget(resp, reqCancel, conn.ctx, nil)", 1)
+original = "shouldUseResolveFallback := requestErr == nil || !isFailureExemptHTTPCode(requestErr.Code)"
+if source.count(original) != 1:
+    raise SystemExit("Pinned slow HTTP retry fallback changed")
+source = source.replace(original, "shouldUseResolveFallback := !base.YunxIsSlowHTTPConnection(err) && (requestErr == nil || !isFailureExemptHTTPCode(requestErr.Code))")
 path.write_text(source)
