@@ -42,6 +42,7 @@ cp Engine/runtime_proxy_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_proxy
 cp Engine/runtime_scheduler.go "$engine_temp/gopeed/pkg/base/yunx_runtime_scheduler.go"
 cp Engine/runtime_scheduler_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_scheduler_test.go"
 cp Engine/downloader_scheduler.go "$engine_temp/gopeed/pkg/download/yunx_scheduler.go"
+cp Engine/rest_storage.go "$engine_temp/gopeed/pkg/rest/yunx_storage.go"
 python3 Engine/patch-runtime-proxy.py "$engine_temp/gopeed"
 python3 Engine/patch-scheduler.py "$engine_temp/gopeed"
 cd "$engine_temp/gopeed"

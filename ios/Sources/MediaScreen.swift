@@ -61,6 +61,7 @@ struct MediaScreen: View {
     @State private var provider: MediaProvider = .bilibili
     @State private var preferDASH = true
     @State private var accountID: UUID?
+    @State private var choseAccount = false
     @State private var input = ""
     @State private var loadedLink: MediaLink?
     @State private var loadedCookie = ""
@@ -77,12 +78,12 @@ struct MediaScreen: View {
                     Picker("平台", selection: $provider) {
                         ForEach(MediaProvider.allCases) { Text($0.rawValue).tag($0) }
                     }.disabled(model.busy)
-                        .onChange(of: provider) { _, _ in accountID = accounts.first(where: { $0.isPrimary == true })?.id; model.clear(); loadedCookie = "" }
+                        .onChange(of: provider) { _, _ in choseAccount = false; accountID = accounts.first(where: { $0.isPrimary == true })?.id; model.clear(); loadedCookie = "" }
                     if provider == .bilibili {
                         Toggle("登录后优先 DASH 高清合轨", isOn: $preferDASH).disabled(model.busy)
                             .onChange(of: preferDASH) { _, _ in model.clear() }
                     }
-                    Picker("账号", selection: $accountID) {
+                    Picker("账号", selection: Binding(get: { accountID }, set: { accountID = $0; choseAccount = true; action?.cancel(); model.clear(); loadedCookie = "" })) {
                         Text("游客").tag(Optional<UUID>.none)
                         ForEach(accounts) { Text($0.remark.isEmpty ? "已保存账号" : $0.remark).tag(Optional($0.id)) }
                     }.disabled(model.busy)
@@ -173,7 +174,12 @@ struct MediaScreen: View {
                 if let link = try? MediaLink.parse(value) { provider = link.provider }
                 navigation.mediaInput = nil
             }
-            .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
+            .onReceive(vault.$accounts) { values in
+                if let id = accountID, !values.contains(where: { $0.id == id && $0.platform == provider.rawValue }) {
+                    accountID = nil; choseAccount = true; action?.cancel(); model.clear(); loadedCookie = ""
+                }
+            }
+            .onAppear { if !choseAccount { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
             .sheet(item: $browserRoute) { route in
                 BrowserMediaResolver(route: route) { result in
                     model.result = result; model.failure = nil; model.notice = result.notice

@@ -80,9 +80,7 @@ func Stop() { rest.Stop(); base.YunxReleaseNativeSlots() }
 
 // Migration must observe close failures rather than relying on log-only Stop.
 func StopForStorage() error {
-    var closeErr error
-    if rest.Downloader != nil { closeErr = rest.Downloader.Close() }
-    rest.Stop()
+    closeErr := rest.StopForStorage()
     base.YunxReleaseNativeSlots()
     if closeErr != nil { return errors.New("engine files could not be closed safely") }
     return nil

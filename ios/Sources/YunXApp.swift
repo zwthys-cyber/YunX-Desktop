@@ -250,7 +250,7 @@ struct AccountScreen: View {
                 } else if let provider = MediaProvider(rawValue: account.platform) {
                     name = try await MediaClient().validate(provider: provider, cookie: account.secret)
                 } else if account.platform == "GitHub" {
-                    name = try await GitHubClient(token: account.secret).validateAccount()
+                    name = try await GitHubClient.saved(id: account.id, vault: vault).validateAccount()
                 } else { return }
                 verification = "\(account.platform)账号有效：\(name)"
             } catch { verification = "账号验证失败，请检查登录状态与网络。" }

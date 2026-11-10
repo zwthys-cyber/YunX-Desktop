@@ -5,7 +5,11 @@ import XCTest
 final class HeldDownloadProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() { }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Length": "1048576", "Accept-Ranges": "bytes", "ETag": "\"held-fixture\""])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        // Leave the body pending until the task is explicitly cancelled.
+    }
     override func stopLoading() { }
 }
 
@@ -26,7 +30,7 @@ final class DownloadPersistenceTests: XCTestCase {
         config.protocolClasses = [CloudMockProtocol.self]
         return config
     }
-    func testDifferentSessionTaskCannotOverwriteCurrentDownload() throws {
+    func testDifferentSessionTaskCannotOverwriteCurrentDownload() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let config = URLSessionConfiguration.ephemeral
@@ -35,6 +39,8 @@ final class DownloadPersistenceTests: XCTestCase {
         XCTAssertTrue(store.add(URL(string: "https://example.invalid/fixture.bin")!))
         let item = try XCTUnwrap(store.items.first)
         defer { store.delete(item.id) }
+        let deadline = Date().addingTimeInterval(10)
+        while store.items.first?.state == .waiting, Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
         let other = URLSession(configuration: config)
         defer { other.invalidateAndCancel() }
         let stale = other.downloadTask(with: item.url)

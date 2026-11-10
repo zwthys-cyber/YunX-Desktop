@@ -16,6 +16,7 @@ struct CloudHomeScreen: View {
     @ObservedObject var downloads: DownloadStore
     @State private var provider: CloudProvider = .quark
     @State private var accountID: UUID?
+    @State private var choseAccount = false
     @State private var input = ""
     @State private var passcode = ""
     @State private var error: String?
@@ -35,8 +36,8 @@ struct CloudHomeScreen: View {
                 Section("平台与账号") {
                     Picker("平台", selection: $provider) {
                         ForEach(CloudProvider.allCases) { Text($0.rawValue).tag($0) }
-                    }.onChange(of: provider) { _, _ in accountID = accounts.first(where: { $0.isPrimary == true })?.id }
-                    Picker("账号", selection: $accountID) {
+                    }.onChange(of: provider) { _, _ in choseAccount = false; accountID = accounts.first(where: { $0.isPrimary == true })?.id }
+                    Picker("账号", selection: Binding(get: { accountID }, set: { accountID = $0; choseAccount = true })) {
                         Text("游客").tag(Optional<UUID>.none)
                         ForEach(accounts) { account in
                             Text(account.remark.isEmpty ? "已保存账号" : account.remark)
@@ -86,7 +87,10 @@ struct CloudHomeScreen: View {
                     if let share = try? CloudShare.parse(value) { provider = share.provider }
                     navigation.cloudInput = nil
                 }
-                .onAppear { if accountID == nil { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
+                .onReceive(vault.$accounts) { values in
+                    if let id = accountID, !values.contains(where: { $0.id == id && $0.platform == provider.rawValue }) { accountID = nil; choseAccount = true }
+                }
+                .onAppear { if !choseAccount { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
                 .onDisappear { commandTask?.cancel() }
                 .sheet(item: $route) { item in
                     CloudBrowserScreen(route: item, vault: vault, downloads: downloads)
@@ -103,8 +107,11 @@ struct CloudHomeScreen: View {
             let share = try await CloudCommandClient().resolve(command, passcode: code)
             try Task.checkCancellation()
             guard input == command, passcode == code, provider == requestedProvider, accountID == requestedAccount else { return }
-            provider = share.provider
-            accountID = vault.accounts.first { $0.platform == share.provider.rawValue && $0.isPrimary == true }?.id
+            if provider != share.provider {
+                provider = share.provider
+                choseAccount = false
+                accountID = vault.accounts.first { $0.platform == share.provider.rawValue && $0.isPrimary == true }?.id
+            }
             open(share)
         } catch { if !Task.isCancelled { self.error = "口令解析失败。请检查网络、稍后重试或粘贴原始分享链接。" } }
     }

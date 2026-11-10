@@ -190,7 +190,7 @@ extension GitHubTests {
         let target = URL(string: "https://release-assets.githubusercontent.com/file")!
         XCTAssertNil(DownloadHeaders.redirectHeaders(plan.headers, original: plan.url, target: target)["Authorization"])
         let asset = GitHubRelease.Asset(id: 42, name: "asset.bin", size: 3, browser_download_url: URL(string: "https://github.com/owner/repo/releases/download/v1/asset.bin")!)
-        let release = try client.releaseDownload(repo, asset: asset)
+        let release = try await client.releaseDownload(repo, asset: asset)
         XCTAssertEqual(release.url.path, "/repos/owner/repo/releases/assets/42")
         XCTAssertEqual(release.headers["Accept"], "application/octet-stream")
         XCTAssertEqual(release.headers["Authorization"], "Bearer test-token")

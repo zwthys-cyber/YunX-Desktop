@@ -268,12 +268,14 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                   let index = items.firstIndex(where: { $0.id == id }), items[index].backgroundTransfer == true,
                   items[index].state != .completed, !removed.contains(id) else { candidate.cancel(); continue }
             guard task.state == .running || task.state == .suspended else { continue }
-            guard active[id] == nil else { task.cancel(); continue }
+            if let current = active[id], current !== task { task.cancel(); continue }
             active[id] = task
             latestTaskIdentity[id] = ObjectIdentifier(task)
-            let slot = id.uuidString + "." + UUID().uuidString
-            _ = YunxengineAcquireHTTPTask(slot, true)
-            transferSlots[id] = slot
+            if transferSlots[id] == nil {
+                let slot = id.uuidString + "." + UUID().uuidString
+                _ = YunxengineAcquireHTTPTask(slot, true)
+                transferSlots[id] = slot
+            }
             if restorableBackground.contains(id) {
                 items[index].state = .downloading; items[index].error = nil
                 items[index].received = max(items[index].received, task.countOfBytesReceived)
@@ -362,6 +364,22 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private func releaseSlot(_ id: UUID) {
         if let slot = transferSlots.removeValue(forKey: id) { YunxengineReleaseHTTPTask(slot) }
     }
+    private func matchesTask(_ session: URLSession, task: URLSessionTask, id: UUID) -> Bool {
+        if let identity = latestTaskIdentity[id] { return identity == ObjectIdentifier(task) }
+        // A completed background event can arrive before or after getAllTasks.
+        // Only this store's real background session can adopt an unknown task.
+        guard session === backgroundSession, session.configuration.identifier == BackgroundDownloadPolicy.identifier,
+              !removed.contains(id), let item = items.first(where: { $0.id == id }), item.backgroundTransfer == true, item.state != .completed,
+              let downloadTask = task as? URLSessionDownloadTask else { return false }
+        latestTaskIdentity[id] = ObjectIdentifier(task)
+        active[id] = downloadTask
+        if transferSlots[id] == nil {
+            let slot = id.uuidString + "." + UUID().uuidString
+            _ = YunxengineAcquireHTTPTask(slot, true)
+            transferSlots[id] = slot
+        }
+        return true
+    }
 
     private func writeResume(_ data: Data?, id: UUID) {
         guard let data else { return }
@@ -390,7 +408,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                     totalBytesExpectedToWrite: Int64) {
         guard let value = downloadTask.taskDescription, let id = UUID(uuidString: value),
               let index = items.firstIndex(where: { $0.id == id }) else { return }
-        if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(downloadTask) { return }
+        guard matchesTask(session, task: downloadTask, id: id) else { return }
         guard items[index].state != .completed else { return }
         items[index].received = totalBytesWritten
         items[index].expected = totalBytesExpectedToWrite
@@ -400,7 +418,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                     didFinishDownloadingTo location: URL) {
         guard let value = downloadTask.taskDescription, let id = UUID(uuidString: value),
               !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }), items[index].state != .completed else { return }
-        if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(downloadTask) { return }
+        guard matchesTask(session, task: downloadTask, id: id) else { return }
         guard let response = downloadTask.response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode) else {
             if queueOriginFallback(index) { return }
@@ -506,7 +524,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         guard let value = task.taskDescription, let id = UUID(uuidString: value) else { return }
-        if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(task) { return }
+        guard matchesTask(session, task: task, id: id) else { return }
         active.removeValue(forKey: id)
         releaseSlot(id)
         if removed.contains(id) { latestTaskIdentity.removeValue(forKey: id) }

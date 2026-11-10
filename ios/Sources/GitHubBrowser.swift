@@ -91,18 +91,45 @@ struct GitHubRelease: Decodable, Identifiable {
 final class GitHubClient {
     private let session: URLSession
     private let token: String
-    init(token: String = "", session: URLSession? = nil) {
+    private let credentialLookup: (@MainActor () -> String?)?
+    private let unauthorized: (@MainActor (String) -> Void)?
+    init(token: String = "", session: URLSession? = nil, credentialLookup: (@MainActor () -> String?)? = nil,
+         unauthorized: (@MainActor (String) -> Void)? = nil) {
         self.token = token
+        self.credentialLookup = credentialLookup; self.unauthorized = unauthorized
         if let session { self.session = session }
         else {
             let config = URLSessionConfiguration.ephemeral
             config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
             config.timeoutIntervalForRequest = 30
+            config.timeoutIntervalForResource = 30
             self.session = NetworkProxy.session(configuration: config, delegate: GitHubRedirectPolicy(), delegateQueue: nil)
         }
     }
     deinit { session.invalidateAndCancel() }
+    @MainActor static func saved(id: UUID, vault: CredentialVault, session: URLSession? = nil) -> GitHubClient {
+        let token = vault.accounts.first { $0.id == id && $0.platform == "GitHub" }?.secret ?? ""
+        return GitHubClient(token: token, session: session, credentialLookup: { [weak vault] in
+            vault?.accounts.first { $0.id == id && $0.platform == "GitHub" }?.secret
+        }, unauthorized: { [weak vault] rejected in
+            guard let current = vault?.accounts.first(where: { $0.id == id && $0.platform == "GitHub" }), current.secret == rejected else { return }
+            vault?.delete(id)
+        })
+    }
+    private func authorizationToken() async throws -> String {
+        try Task.checkCancellation()
+        let value: String
+        if let credentialLookup {
+            guard let current = await credentialLookup(), !current.isEmpty else { throw CloudError.message("所选 GitHub 账号已移除，请返回账号管理重新选择。") }
+            value = current
+        } else { value = token }
+        guard value.utf8.count <= 2048, !value.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains) else {
+            throw CloudError.message("GitHub Token 格式无效，请重新输入。")
+        }
+        return value
+    }
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], accept: String = "application/vnd.github+json") async throws -> T {
+        let token = try await authorizationToken()
         var parts = URLComponents()
         parts.scheme = "https"; parts.host = "api.github.com"; parts.path = path
         parts.queryItems = query.isEmpty ? nil : query
@@ -117,13 +144,14 @@ final class GitHubClient {
         catch { if Task.isCancelled { throw CancellationError() }; throw CloudError.message("GitHub 网络连接失败，请重试。") }
         guard let http = response as? HTTPURLResponse else { throw CloudError.message("GitHub 响应无效。") }
         guard http.statusCode == 200 else {
+            if http.statusCode == 401, !token.isEmpty { await unauthorized?(token) }
             throw GitHubAPIError(status: http.statusCode)
         }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw CloudError.message("GitHub 数据格式无法识别。") }
     }
     func validateAccount() async throws -> String {
-        guard !token.isEmpty else { throw CloudError.message("请先保存 GitHub Token。") }
+        guard !(try await authorizationToken()).isEmpty else { throw CloudError.message("请先保存 GitHub Token。") }
         struct Profile: Decodable { let login: String }
         let profile: Profile = try await get("/user")
         guard !profile.login.isEmpty else { throw CloudError.message("GitHub 账号信息为空。") }
@@ -168,23 +196,25 @@ final class GitHubClient {
     func fileDownload(_ repo: GitHubRepository, path: String) async throws -> CloudDownload {
         let file = try await entry(repo, path: path)
         guard file.type == "file", file.path == path, file.size >= 0, file.size <= 100 * 1024 * 1024 else { throw CloudError.message("仓库文件超出 Contents API 范围或不是普通文件，请使用 Releases。") }
+        let token = try await authorizationToken()
         if token.isEmpty {
             guard let url = file.download_url, Self.safe(url) else { throw CloudError.message("GitHub 未返回可公开下载的文件地址，请选择有权限的 Token。") }
             return CloudDownload(url: url, filename: file.name, size: file.size, headers: [:])
         }
         let url = try apiURL(repo.apiPath + "/contents/" + file.path, query: repo.refQuery)
-        return CloudDownload(url: url, filename: file.name, size: file.size, headers: downloadHeaders(accept: "application/vnd.github.raw+json"))
+        return CloudDownload(url: url, filename: file.name, size: file.size, headers: downloadHeaders(token: token, accept: "application/vnd.github.raw+json"))
     }
-    func releaseDownload(_ repo: GitHubRepository, asset: GitHubRelease.Asset) throws -> CloudDownload {
+    func releaseDownload(_ repo: GitHubRepository, asset: GitHubRelease.Asset) async throws -> CloudDownload {
+        let token = try await authorizationToken()
         guard asset.id > 0, asset.size >= 0 else { throw CloudError.message("GitHub 发布附件信息无效。") }
         if token.isEmpty {
             guard Self.safe(asset.browser_download_url) else { throw CloudError.message("GitHub 发布附件地址不安全。") }
             return CloudDownload(url: asset.browser_download_url, filename: asset.name, size: asset.size, headers: [:])
         }
         let url = try apiURL(repo.apiPath + "/releases/assets/" + String(asset.id))
-        return CloudDownload(url: url, filename: asset.name, size: asset.size, headers: downloadHeaders(accept: "application/octet-stream"))
+        return CloudDownload(url: url, filename: asset.name, size: asset.size, headers: downloadHeaders(token: token, accept: "application/octet-stream"))
     }
-    private func downloadHeaders(accept: String) -> [String: String] {
+    private func downloadHeaders(token: String, accept: String) -> [String: String] {
         ["Authorization": "Bearer " + token, "Accept": accept, "User-Agent": "YunX-iOS"]
     }
     private func apiURL(_ path: String, query: [URLQueryItem] = []) throws -> URL {
@@ -201,6 +231,7 @@ final class GitHubClient {
         return text
     }
     func readmeHTML(_ repo: GitHubRepository) async throws -> String {
+        let token = try await authorizationToken()
         var parts = URLComponents()
         parts.scheme = "https"; parts.host = "api.github.com"; parts.path = repo.apiPath + "/readme"
         parts.queryItems = repo.refQuery.isEmpty ? nil : repo.refQuery
@@ -211,7 +242,9 @@ final class GitHubClient {
         if !token.isEmpty { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw CloudError.message("README 无法加载，请检查访问权限或切换原始文本。") }
+        guard let http = response as? HTTPURLResponse else { throw CloudError.message("README 无法加载，请检查访问权限或切换原始文本。") }
+        if http.statusCode == 401, !token.isEmpty { await unauthorized?(token) }
+        guard http.statusCode == 200 else { throw GitHubAPIError(status: http.statusCode) }
         var data = Data()
         for try await byte in bytes {
             guard data.count < 2 * 1024 * 1024 else { throw CloudError.message("README 超过 2MB 显示上限。") }
@@ -224,6 +257,7 @@ final class GitHubClient {
         try await get(repo.apiPath + "/releases", query: [URLQueryItem(name: "per_page", value: "20"), URLQueryItem(name: "page", value: String(page))])
     }
 }
+@MainActor
 struct GitHubScreen: View {
     @ObservedObject private var navigation = AppNavigation.shared
     @EnvironmentObject var library: LinkLibrary
@@ -231,6 +265,7 @@ struct GitHubScreen: View {
     @ObservedObject var downloads: DownloadStore
     @State private var input = "zwthys-cyber/YunX-Desktop"
     @State private var accountID: UUID?
+    @State private var choseAccount = false
     @State private var owner = ""
     @State private var organization = false
     @State private var repo: GitHubRepository?
@@ -242,7 +277,7 @@ struct GitHubScreen: View {
             Form {
                 Section("GitHub 仓库") {
                     TextField("owner/repo 或仓库链接", text: $input).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Picker("账号", selection: $accountID) {
+                    Picker("账号", selection: Binding(get: { accountID }, set: { accountID = $0; choseAccount = true })) {
                         Text("游客").tag(nil as UUID?)
                         ForEach(vault.accounts.filter { $0.platform == "GitHub" }) { account in
                             Text(account.remark.isEmpty ? "GitHub 账号" : account.remark).tag(Optional(account.id))
@@ -254,10 +289,12 @@ struct GitHubScreen: View {
                             opening = true; message = nil
                             defer { opening = false }
                             do {
-                                let parsed = try GitHubInput.parse(input)
-                                let client = GitHubClient(token: vault.accounts.first { $0.id == accountID && $0.platform == "GitHub" }?.secret ?? "")
+                                let requestedInput = input, requestedAccount = accountID
+                                let parsed = try GitHubInput.parse(requestedInput)
+                                let client = makeClient()
                                 let resolved = try await client.resolve(parsed)
                                 try Task.checkCancellation()
+                                guard input == requestedInput, accountID == requestedAccount else { return }
                                 repo = resolved
                                 library.record(platform: "GitHub", text: resolved.historyText)
                             } catch { if !Task.isCancelled { message = error.localizedDescription } }
@@ -271,7 +308,7 @@ struct GitHubScreen: View {
                     Toggle("组织账号", isOn: $organization)
                     NavigationLink("浏览仓库列表") {
                         GitHubOwnerScreen(owner: owner.trimmingCharacters(in: .whitespacesAndNewlines), organization: organization,
-                            client: GitHubClient(token: vault.accounts.first { $0.id == accountID && $0.platform == "GitHub" }?.secret ?? ""), downloads: downloads)
+                            client: makeClient(), downloads: downloads)
                     }.disabled(owner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 Section {
@@ -281,14 +318,23 @@ struct GitHubScreen: View {
             }.navigationTitle("GitHub")
                 .onReceive(navigation.$githubInput.compactMap { $0 }) { value in input = value; message = nil; navigation.githubInput = nil }
                 .onReceive(navigation.$githubOwner.compactMap { $0 }) { value in owner = value; organization = false; message = nil; navigation.githubOwner = nil }
-                .onAppear { if accountID == nil { accountID = vault.accounts.first(where: { $0.platform == "GitHub" && $0.isPrimary == true })?.id } }
+                .onReceive(vault.$accounts) { accounts in
+                    if let id = accountID, !accounts.contains(where: { $0.id == id && $0.platform == "GitHub" }) {
+                        accountID = nil; choseAccount = true; message = "所选 GitHub 账号已移除，已切换为游客。"
+                    }
+                }
+                .onAppear { if !choseAccount { accountID = vault.accounts.first(where: { $0.platform == "GitHub" && $0.isPrimary == true })?.id } }
                 .onDisappear { action?.cancel() }
                 .navigationDestination(isPresented: Binding(get: { repo != nil }, set: { if !$0 { repo = nil } })) {
                     if let repo {
-                        GitHubRepositoryScreen(repo: repo, client: GitHubClient(token: vault.accounts.first { $0.id == accountID && $0.platform == "GitHub" }?.secret ?? ""), downloads: downloads)
+                        GitHubRepositoryScreen(repo: repo, client: makeClient(), downloads: downloads)
                     }
                 }
         }
+    }
+    @MainActor private func makeClient() -> GitHubClient {
+        guard let id = accountID else { return GitHubClient() }
+        return GitHubClient.saved(id: id, vault: vault)
     }
 }
 struct GitHubRepositoryScreen: View {
@@ -483,7 +529,7 @@ struct GitHubReleasesScreen: View {
                         Button {
                             Task {
                                 do {
-                                    let plan = try client.releaseDownload(repo, asset: asset)
+                                    let plan = try await client.releaseDownload(repo, asset: asset)
                                     let routed = try await GitHubMirrorSelector.shared.plan(plan)
                                     message = downloads.add(routed.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size, originFallback: routed.origin) ? "已加入下载：" + asset.name : downloads.storageError
                                 } catch { message = error.localizedDescription }

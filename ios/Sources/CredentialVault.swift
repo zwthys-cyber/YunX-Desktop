@@ -16,10 +16,12 @@ struct SavedCredential: Codable, Identifiable {
 final class CredentialVault: ObservableObject {
     @Published private(set) var accounts: [SavedCredential] = []
     @Published var message: String?
-    private let service = "io.github.zwthys.yunx.accounts"
+    private let service: String
     private let account = "vault-v1"
+    private var unreadable = false
 
-    init() {
+    init(service: String = "io.github.zwthys.yunx.accounts") {
+        self.service = service
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -27,11 +29,12 @@ final class CredentialVault: ObservableObject {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return }
         guard status == errSecSuccess, let data = result as? Data else {
+            unreadable = true
             message = "无法读取钥匙串（\(status)）"
             return
         }
         do { accounts = try JSONDecoder().decode([SavedCredential].self, from: data) }
-        catch { message = "凭证数据损坏，未覆盖原始钥匙串" }
+        catch { unreadable = true; message = "凭证数据损坏，未覆盖原始钥匙串" }
     }
 
     private var baseQuery: [String: Any] {
@@ -111,6 +114,7 @@ final class CredentialVault: ObservableObject {
     }
 
     private func persist(_ updated: [SavedCredential]) {
+        guard !unreadable else { message = "原凭证无法读取，已保留原始钥匙串；请解锁或排查备份后重启。"; return }
         do {
             let data = try JSONEncoder().encode(updated)
             let attributes: [String: Any] = [

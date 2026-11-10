@@ -122,12 +122,38 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Run offline protocol tests on iOS Simulator
+      - name: Restore simulator SDK module cache
+        id: swift-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ios/build/SimulatorDerivedData/ModuleCache.noindex
+          key: swift-ios-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh', 'ios/project.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            swift-ios-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh', 'ios/project.yml') }}-
+            swift-ios-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-
+
+      - name: Compile simulator app and test bundle
+        id: simulator-build
+        timeout-minutes: 40
         shell: bash
         run: |
           set -o pipefail
           mkdir -p ios/build
-          bash ios/test-ios.sh 2>&1 | tee ios/build/tests.log
+          bash ios/test-ios.sh build 2>&1 | tee ios/build/tests-build.log
+
+      - name: Preserve compiler-owned SDK cache
+        if: always() && (steps.simulator-build.outcome == 'success' || steps.simulator-build.outcome == 'failure') && steps.swift-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ios/build/SimulatorDerivedData/ModuleCache.noindex
+          key: swift-ios-${{ runner.arch }}-${{ steps.engine-toolchain.outputs.key }}-${{ hashFiles('ios/Engine/**', 'ios/build-engine.sh', 'ios/project.yml') }}-${{ github.run_id }}
+
+      - name: Run offline protocol tests on iOS Simulator
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -o pipefail
+          bash ios/test-ios.sh run 2>&1 | tee ios/build/tests.log
 
       - name: Compile and package IPA
         shell: bash
