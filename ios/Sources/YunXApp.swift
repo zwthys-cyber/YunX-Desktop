@@ -5,6 +5,8 @@ import SwiftUI
 struct YunXApp: App {
     @StateObject private var downloads = DownloadStore()
     @StateObject private var vault = CredentialVault()
+    @StateObject private var library = LinkLibrary()
+    @AppStorage("appearance") private var appearance = "system"
 
     var body: some Scene {
         WindowGroup {
@@ -15,13 +17,17 @@ struct YunXApp: App {
                     .tabItem { Label("视频与图集", systemImage: "play.rectangle") }
                 DownloadScreen(store: downloads)
                     .tabItem { Label("下载", systemImage: "arrow.down.circle") }
-                AccountScreen(vault: vault)
-                    .tabItem { Label("账号", systemImage: "person.crop.circle") }
+                NavigationStack {
+                    List {
+                        NavigationLink("账号管理") { AccountScreen(vault: vault) }
+                        NavigationLink("设置与收藏") { SettingsScreen(downloads: downloads) }
+                    }.navigationTitle("我的")
+                }.tabItem { Label("我的", systemImage: "person.crop.circle") }
                 GitHubScreen(vault: vault, downloads: downloads)
                     .tabItem { Label("GitHub", systemImage: "shippingbox") }
-                PortStatusScreen()
-                    .tabItem { Label("移植进度", systemImage: "list.clipboard") }
             }
+            .environmentObject(library)
+            .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
         }
     }
 }
@@ -58,6 +64,13 @@ struct DownloadScreen: View {
                 if let error = store.storageError {
                     Section("存储提示") { Text(error).foregroundStyle(.red) }
                 }
+                Section("队列") {
+                    HStack {
+                        Button("全部暂停") { store.pauseAll() }.buttonStyle(.bordered)
+                        Button("全部继续") { store.resumeAll() }.buttonStyle(.bordered)
+                    }
+                    Stepper("同时下载：\(store.maximumConcurrent)", value: $store.maximumConcurrent, in: 1...6)
+                }
                 Section("任务") {
                     if store.items.isEmpty {
                         ContentUnavailableView("暂无下载", systemImage: "arrow.down.circle")
@@ -75,7 +88,7 @@ struct DownloadScreen: View {
                             }
                             if let error = item.error { Text(error).font(.caption).foregroundStyle(.red) }
                             HStack {
-                                if item.state == .downloading {
+                                if item.state == .downloading || item.state == .waiting {
                                     Button("暂停") { store.pause(item.id) }.buttonStyle(.bordered)
                                 } else if [.paused, .failed, .waiting].contains(item.state) {
                                     Button("继续") { store.start(item.id) }.buttonStyle(.bordered)
@@ -219,7 +232,7 @@ struct PortStatusScreen: View {
                         "多线程分片、校验、限速与多源下载",
                         "HLS、DASH 合轨与 Live Photo",
                         "BT、磁力、ed2k 与 Gopeed 引擎",
-                        "其他平台网页登录、备份、历史、收藏与诊断",
+                        "其他平台网页登录、备份与诊断",
                         "分享扩展、浏览器集成与后台下载"
                     ], id: \.self) { Text($0) }
                 }

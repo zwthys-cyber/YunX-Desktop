@@ -36,6 +36,7 @@ final class MediaScreenModel: ObservableObject {
 
 @MainActor
 struct MediaScreen: View {
+    @EnvironmentObject var library: LinkLibrary
     @ObservedObject var vault: CredentialVault
     @ObservedObject var downloads: DownloadStore
     @StateObject private var model = MediaScreenModel()
@@ -63,6 +64,7 @@ struct MediaScreen: View {
                     }.disabled(model.busy)
                     TextField("粘贴作品链接或分享文案", text: $input, axis: .vertical)
                         .lineLimit(2...5).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    LibraryPicker(platform: provider.rawValue) { input = $0 }
                     Button("解析") {
                         do {
                             let link = try MediaLink.parse(input)
@@ -70,6 +72,7 @@ struct MediaScreen: View {
                                 model.failure = "请先切换到\(link.provider.rawValue)。"; return
                             }
                             let cookie = accounts.first(where: { $0.id == accountID })?.secret ?? ""
+                            library.record(platform: provider.rawValue, text: link.url.absoluteString)
                             loadedLink = link; loadedCookie = cookie
                             model.clear()
                             action = Task { await model.resolve(link, cookie: cookie) }

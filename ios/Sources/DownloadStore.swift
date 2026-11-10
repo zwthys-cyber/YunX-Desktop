@@ -34,6 +34,12 @@ struct DownloadItem: Codable, Identifiable {
 final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published private(set) var items: [DownloadItem] = []
     @Published var storageError: String?
+    @Published var maximumConcurrent = max(1, min(6, UserDefaults.standard.integer(forKey: "downloadConcurrency") == 0 ? 3 : UserDefaults.standard.integer(forKey: "downloadConcurrency"))) {
+        didSet {
+            UserDefaults.standard.set(maximumConcurrent, forKey: "downloadConcurrency")
+            drainQueue()
+        }
+    }
     private var active: [UUID: URLSessionDownloadTask] = [:]
     private var removed = Set<UUID>()
     private let root: URL
@@ -93,6 +99,37 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     func start(_ id: UUID) {
         guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
+              [.waiting, .paused, .failed].contains(items[index].state) else { return }
+        items[index].state = .waiting
+        items[index].error = nil
+        save()
+        drainQueue()
+    }
+
+    private func drainQueue() {
+        for id in items.reversed().filter({ $0.state == .waiting }).map(\.id) {
+            guard active.count < max(1, min(6, maximumConcurrent)) else { break }
+            launch(id)
+        }
+    }
+
+    func pauseAll() {
+        for id in items.filter({ [.waiting, .downloading].contains($0.state) }).map(\.id) {
+            pause(id)
+        }
+    }
+
+    func resumeAll() {
+        for index in items.indices where [.paused, .failed].contains(items[index].state) {
+            items[index].state = .waiting
+            items[index].error = nil
+        }
+        save()
+        drainQueue()
+    }
+
+    private func launch(_ id: UUID) {
+        guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               items[index].state != .completed, items[index].state != .pausing else { return }
         var request = URLRequest(url: items[index].url)
         if items[index].requiresHeaders == true {
@@ -122,6 +159,11 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func pause(_ id: UUID) {
+        if let index = items.firstIndex(where: { $0.id == id }), items[index].state == .waiting {
+            items[index].state = .paused
+            save()
+            return
+        }
         guard let task = active[id], let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index].state = .pausing
         save()
@@ -133,6 +175,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 self.active.removeValue(forKey: id)
                 self.items[index].state = .paused
                 self.save()
+                self.drainQueue()
             }
         }
     }
@@ -145,6 +188,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         DownloadHeaders.delete(id)
         // 下载完成的文件保留，删除记录不会隐式删除用户文件。
         save()
+        drainQueue()
     }
 
     func fileURL(_ item: DownloadItem) -> URL? {
@@ -255,6 +299,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard let value = task.taskDescription, let id = UUID(uuidString: value) else { return }
         if let current = active[id], current.taskIdentifier != task.taskIdentifier { return }
         active.removeValue(forKey: id)
+        defer { drainQueue() }
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
         if items[index].state == .pausing { return }
         if items[index].state == .paused, let cancellation = error as NSError?,

@@ -54,7 +54,7 @@ final class GitHubClient {
             let config = URLSessionConfiguration.ephemeral
             config.httpCookieStorage = nil; config.httpShouldSetCookies = false; config.urlCredentialStorage = nil
             config.timeoutIntervalForRequest = 30
-            self.session = URLSession(configuration: config, delegate: CloudRedirectPolicy(), delegateQueue: nil)
+            self.session = URLSession(configuration: config, delegate: GitHubRedirectPolicy(), delegateQueue: nil)
         }
     }
     deinit { session.invalidateAndCancel() }
@@ -102,6 +102,7 @@ final class GitHubClient {
     }
 }
 struct GitHubScreen: View {
+    @EnvironmentObject var library: LinkLibrary
     @ObservedObject var vault: CredentialVault
     @ObservedObject var downloads: DownloadStore
     @State private var input = "zwthys-cyber/YunX-Desktop"
@@ -119,8 +120,13 @@ struct GitHubScreen: View {
                             Text(account.remark.isEmpty ? "GitHub 账号" : account.remark).tag(Optional(account.id))
                         }
                     }
+                    LibraryPicker(platform: "GitHub") { input = $0 }
                     Button("打开仓库") {
-                        do { repo = try GitHubRepository.parse(input); message = nil }
+                        do {
+                            let parsed = try GitHubRepository.parse(input)
+                            repo = parsed; message = nil
+                            library.record(platform: "GitHub", text: parsed.owner + "/" + parsed.name)
+                        }
                         catch { message = error.localizedDescription }
                     }
                     if let message { Text(message).foregroundStyle(.red) }
@@ -241,5 +247,14 @@ struct GitHubReleasesScreen: View {
             releases.append(contentsOf: next.filter { !known.contains($0.id) })
             more = next.count == 20; page += 1
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
+    }
+}
+
+private final class GitHubRedirectPolicy: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

@@ -10,6 +10,7 @@ struct CloudRoute: Identifiable {
 
 @MainActor
 struct CloudHomeScreen: View {
+    @EnvironmentObject var library: LinkLibrary
     @ObservedObject var vault: CredentialVault
     @ObservedObject var downloads: DownloadStore
     @State private var provider: CloudProvider = .quark
@@ -44,6 +45,7 @@ struct CloudHomeScreen: View {
                         .lineLimit(3...6).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("提取码（可自动识别，手填优先）", text: $passcode)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    LibraryPicker(platform: provider.rawValue) { input = $0; passcode = "" }
                     Button("解析并浏览") {
                         do {
                             let share = try CloudShare.parse(input, override: passcode)
@@ -52,6 +54,8 @@ struct CloudHomeScreen: View {
                                 return
                             }
                             error = nil
+                            let canonical = "https://" + share.provider.webHost + "/s/" + share.shareID + (share.passcode.isEmpty ? "" : "?pwd=" + share.passcode)
+                            library.record(platform: provider.rawValue, text: canonical)
                             route = CloudRoute(provider: provider, account: selected, share: share)
                         } catch { self.error = error.localizedDescription }
                     }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

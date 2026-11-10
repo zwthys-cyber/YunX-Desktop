@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import SwiftUI
+import Combine
+
+struct LibraryLink: Codable, Identifiable {
+    var id = UUID()
+    let platform: String
+    let text: String
+    var date = Date()
+    var favorite = false
+}
+
+final class LinkLibrary: ObservableObject {
+    @Published private(set) var links: [LibraryLink] = []
+    @Published private(set) var error: String?
+    private let file: URL
+    init(file: URL? = nil) {
+        self.file = file ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("YunX/links.json")
+        do {
+            if FileManager.default.fileExists(atPath: self.file.path) {
+                links = try JSONDecoder().decode([LibraryLink].self, from: Data(contentsOf: self.file))
+            }
+        } catch { self.error = "无法读取链接记录，原文件未覆盖。" }
+    }
+    func record(platform: String, text: String) {
+        guard error == nil else { return }
+        var next = links
+        if let index = next.firstIndex(where: { $0.platform == platform && $0.text == text }) {
+            var existing = next.remove(at: index)
+            existing.date = Date(); next.insert(existing, at: 0)
+        } else { next.insert(LibraryLink(platform: platform, text: text), at: 0) }
+        var count = 0
+        next = next.filter { link in
+            if link.favorite { return true }
+            count += 1; return count <= 200
+        }
+        persist(next)
+    }
+    func toggle(_ id: UUID) {
+        var next = links
+        guard let index = next.firstIndex(where: { $0.id == id }) else { return }
+        next[index].favorite.toggle(); persist(next)
+    }
+    func delete(_ ids: Set<UUID>) { persist(links.filter { !ids.contains($0.id) }) }
+    func clearHistory() { persist(links.filter(\.favorite)) }
+    private func persist(_ next: [LibraryLink]) {
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(next).write(to: file, options: [.atomic, .completeFileProtection])
+            links = next; error = nil
+        } catch { self.error = "链接记录保存失败，请检查设备存储。" }
+    }
+}
+
+struct LibraryPicker: View {
+    @EnvironmentObject var library: LinkLibrary
+    let platform: String
+    let select: (String) -> Void
+    var body: some View {
+        Menu("历史与收藏", systemImage: "clock.arrow.circlepath") {
+            let links = library.links.filter { $0.platform == platform }
+            if links.isEmpty { Text("暂无记录") }
+            ForEach(links.prefix(30)) { link in
+                Button((link.favorite ? "★ " : "") + link.text) { select(link.text) }
+            }
+        }
+    }
+}
+
+struct SettingsScreen: View {
+    @ObservedObject var downloads: DownloadStore
+    @EnvironmentObject var library: LinkLibrary
+    @AppStorage("appearance") private var appearance = "system"
+    @State private var favoritesOnly = false
+    @State private var confirmClear = false
+    var body: some View {
+        Form {
+            Section("外观") {
+                Picker("主题", selection: $appearance) {
+                    Text("跟随系统").tag("system")
+                    Text("浅色").tag("light")
+                    Text("深色").tag("dark")
+                }
+            }
+            Section("下载") {
+                Stepper("同时下载：\(downloads.maximumConcurrent)", value: $downloads.maximumConcurrent, in: 1...6)
+                Text("调低并发后，正在下载的任务继续；新任务等待空闲位置。下载目前使用前台会话。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("链接记录") {
+                Toggle("只看收藏", isOn: $favoritesOnly)
+                if let error = library.error { Text(error).foregroundStyle(.red) }
+                ForEach(library.links.filter { !favoritesOnly || $0.favorite }) { link in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(link.platform).font(.caption).foregroundStyle(.secondary)
+                        Text(link.text).textSelection(.enabled)
+                        HStack {
+                            Button(link.favorite ? "取消收藏" : "收藏") { library.toggle(link.id) }
+                                .buttonStyle(.bordered)
+                            ShareLink(item: link.text) { Text("分享") }.buttonStyle(.bordered)
+                            Spacer()
+                            Button("删除", role: .destructive) { library.delete([link.id]) }.buttonStyle(.bordered)
+                        }
+                    }
+                }
+                Button("清空未收藏历史", role: .destructive) { confirmClear = true }
+                Text("保留最近 200 条历史和收藏。记录可能包含分享提取码，仅保存在本应用的受保护文件中；不保存账号凭证。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section { NavigationLink("移植进度与开源许可") { PortStatusScreen() } }
+        }.navigationTitle("设置与收藏")
+            .confirmationDialog("清空未收藏的历史记录？", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("清空历史", role: .destructive) { library.clearHistory() }
+            }
+    }
+}
