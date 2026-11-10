@@ -11,19 +11,21 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     case xunlei = "迅雷"
     case baidu = "百度"
     case c139 = "139"
-    var supportsWebCookieLogin: Bool { self == .quark || self == .uc || self == .baidu || self == .c139 }
-    var supportsManagement: Bool { [CloudProvider.quark, .uc, .pan123, .guangya, .ilanzou, .xunlei, .baidu, .c139].contains(self) }
+    case pan115 = "115"
+    var supportsWebCookieLogin: Bool { self == .quark || self == .uc || self == .baidu || self == .c139 || self == .pan115 }
+    var supportsManagement: Bool { [CloudProvider.quark, .uc, .pan123, .guangya, .ilanzou, .xunlei, .baidu, .c139, .pan115].contains(self) }
     var id: String { rawValue }
     var apiHost: String {
-        switch self { case .quark: return "drive-pc.quark.cn"; case .uc: return "pc-api.uc.cn"; case .pan123: return "yun.123pan.cn"; case .guangya: return "api.guangyapan.com"; case .ilanzou: return "apis.ilanzou.com"; case .xunlei: return "api-pan.xunlei.com"; case .baidu: return "pan.baidu.com"; case .c139: return "personal-kd-njs.yun.139.com" }
+        switch self { case .quark: return "drive-pc.quark.cn"; case .uc: return "pc-api.uc.cn"; case .pan123: return "yun.123pan.cn"; case .guangya: return "api.guangyapan.com"; case .ilanzou: return "apis.ilanzou.com"; case .xunlei: return "api-pan.xunlei.com"; case .baidu: return "pan.baidu.com"; case .c139: return "personal-kd-njs.yun.139.com"; case .pan115: return "webapi.115.com" }
     }
     var webHost: String {
-        switch self { case .quark: return "pan.quark.cn"; case .uc: return "drive.uc.cn"; case .pan123: return "www.123pan.com"; case .guangya: return "www.guangyapan.com"; case .ilanzou: return "www.ilanzou.com"; case .xunlei: return "pan.xunlei.com"; case .baidu: return "pan.baidu.com"; case .c139: return "yun.139.com" }
+        switch self { case .quark: return "pan.quark.cn"; case .uc: return "drive.uc.cn"; case .pan123: return "www.123pan.com"; case .guangya: return "www.guangyapan.com"; case .ilanzou: return "www.ilanzou.com"; case .xunlei: return "pan.xunlei.com"; case .baidu: return "pan.baidu.com"; case .c139: return "yun.139.com"; case .pan115: return "115.com" }
     }
     var cookieDomain: String {
-        switch self { case .quark: return "quark.cn"; case .uc: return "uc.cn"; case .pan123: return "123pan.cn"; case .guangya: return "guangyapan.com"; case .ilanzou: return "ilanzou.com"; case .xunlei: return "xunlei.com"; case .baidu: return "baidu.com"; case .c139: return "139.com" }
+        switch self { case .quark: return "quark.cn"; case .uc: return "uc.cn"; case .pan123: return "123pan.cn"; case .guangya: return "guangyapan.com"; case .ilanzou: return "ilanzou.com"; case .xunlei: return "xunlei.com"; case .baidu: return "baidu.com"; case .c139: return "139.com"; case .pan115: return "115.com" }
     }
     func acceptsShareHost(_ host: String) -> Bool {
+        if self == .pan115 { return ["115.com", "115cdn.com", "115rc.com", "www.115.com", "www.115cdn.com", "www.115rc.com"].contains(host) }
         if self == .ilanzou { return ["ilanzou.com", "www.ilanzou.com", "ilanzou.net", "www.ilanzou.net", "ilanzou.org", "www.ilanzou.org", "ilanzou.cn", "www.ilanzou.cn"].contains(host) }
         if self == .guangya { return host == "www.guangyapan.com" || host == "guangyapan.com" }
         if self == .pan123 { return ["www.123pan.com", "123pan.com", "www.123865.com", "123865.com", "www.123684.com", "123684.com", "www.123912.com", "123912.com", "www.123pan.cn", "yun.123pan.cn"].contains(host) }
@@ -32,6 +34,7 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     var origin: String { "https://" + webHost }
     var loginURL: URL { URL(string: origin + (self == .c139 ? "/m/#/login" : "/"))! }
     var userAgent: String {
+        if self == .pan115 { return Pan115Client.webAgent }
         if self == .c139 { return C139Protocol.mobileAgent }
         if self == .baidu { return BaiduClient.webAgent }
         if self == .xunlei { return XunleiProtocol.webAgent }
@@ -58,6 +61,17 @@ struct CloudShare: Equatable {
             guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                   url.user == nil, url.password == nil,
                   let provider = CloudProvider.allCases.first(where: { $0.acceptsShareHost(url.host?.lowercased() ?? "") }) else { continue }
+            if provider == .pan115 {
+                let parts = url.path.split(separator: "/")
+                let raw = parts.count == 2 && parts[0] == "s" ? String(parts[1]) : (parts.count == 1 ? String(parts[0]) : "")
+                let components = raw.split(separator: "-", maxSplits: 1).map(String.init)
+                guard let id = components.first, id.range(of: "^sw[A-Za-z0-9]+$", options: .regularExpression) != nil else { continue }
+                let queryCode = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { ["password", "pwd"].contains($0.name.lowercased()) })?.value
+                let regex = try NSRegularExpression(pattern: #"(?:提取码|访问码|密码)\s*[：:]?\s*([A-Za-z0-9]{4,8})"#)
+                let textCode = regex.firstMatch(in: text, range: range).flatMap { Range($0.range(at: 1), in: text) }.map { String(text[$0]) }
+                let manual = override.trimmingCharacters(in: .whitespacesAndNewlines)
+                return CloudShare(provider: provider, shareID: id, passcode: manual.isEmpty ? (queryCode ?? (components.count == 2 ? components[1] : nil) ?? textCode ?? "") : manual)
+            }
             if provider == .c139 {
                 let fragment = url.fragment ?? ""
                 let components = fragment.split(separator: "?").first.map(String.init) ?? ""
@@ -84,7 +98,7 @@ struct CloudShare: Equatable {
             return CloudShare(provider: provider, shareID: String(parts[1]),
                               passcode: manual.isEmpty ? (queryCode ?? textCode ?? "") : manual)
         }
-        throw CloudError.message("目前支持夸克、UC、123、光鸭、蓝奏优享、迅雷、百度和 139 分享链接，请粘贴完整的 https://…/s/… 链接。")
+        throw CloudError.message("目前支持夸克、UC、123、光鸭、蓝奏优享、迅雷、百度、139 和 115 分享链接，请粘贴完整的 https://…/s/… 链接。")
     }
 }
 
@@ -144,6 +158,7 @@ final class CloudClient {
     private var xunlei: XunleiClient?
     private var baidu: BaiduClient?
     private var c139: C139Client?
+    private var pan115: Pan115Client?
     private let session: URLSession
     private let cookieChanged: ((String) -> Void)?
     private var tokens: [CloudShareKey: String] = [:]
@@ -166,6 +181,7 @@ final class CloudClient {
         if provider == .pan123 { pan123 = Pan123Client(token: cookie, session: self.session) }
         if provider == .guangya { guangya = GuangYaClient(token: cookie, fields: fields, session: self.session, changed: credentialChanged) }
         if provider == .ilanzou { ilanzou = ILanzouClient(token: cookie, fields: fields, session: self.session) }
+        if provider == .pan115 { pan115 = Pan115Client(cookie: cookie, session: self.session) }
         if provider == .c139 { c139 = C139Client(cookie: cookie, fields: fields, session: self.session) }
         if provider == .baidu { baidu = BaiduClient(cookie: cookie, session: self.session, changed: cookieChanged) }
         if provider == .xunlei { xunlei = XunleiClient(token: cookie, fields: fields, session: self.session, changed: credentialChanged) }
@@ -174,6 +190,7 @@ final class CloudClient {
     deinit { session.invalidateAndCancel() }
 
     func validateAccount() async throws -> String {
+        if let pan115 { return try await pan115.validate() }
         if let c139 { return try await c139.validate() }
         if let baidu { let name = try await baidu.validate(); cookie = baidu.cookie; return name }
         if let xunlei { return try await xunlei.validate() }
@@ -197,6 +214,7 @@ final class CloudClient {
     }
 
     func mutate(_ operation: CloudMutation) async throws {
+        if let pan115 { try await pan115.mutate(operation); return }
         if let c139 { try await c139.mutate(operation); return }
         if let baidu { try await baidu.mutate(operation); return }
         if let xunlei { try await xunlei.mutate(operation); return }
@@ -260,6 +278,7 @@ final class CloudClient {
     }
 
     func list(share: CloudShare?, parentID: String = "0", page: Int = 1) async throws -> [CloudFile] {
+        if let pan115 { return try await pan115.list(share: share, parent: parentID, page: page) }
         if let c139 { return try await c139.list(share: share, parent: parentID, page: page) }
         if let baidu { return try await baidu.list(share: share, parent: parentID, page: page) }
         if let xunlei { return try await xunlei.list(share: share, parent: parentID, page: page) }
@@ -312,7 +331,8 @@ final class CloudClient {
     func listPage(share: CloudShare?, parentID: String = "0", page: Int = 1) async throws -> CloudPage {
         let files = try await list(share: share, parentID: parentID, page: page)
         let more: Bool
-        if let c139 { more = c139.hasMore(share: share, parent: parentID, page: page) }
+        if let pan115 { more = pan115.hasMore(share: share, parent: parentID, page: page) }
+        else if let c139 { more = c139.hasMore(share: share, parent: parentID, page: page) }
         else if let baidu { more = baidu.hasMore(share: share, parent: parentID, page: page) }
         else if let xunlei { more = xunlei.hasMore(share: share, parent: parentID, page: page) }
         else if let pan123 { more = pan123.hasMore(share: share, parent: parentID, page: page) }
@@ -324,6 +344,7 @@ final class CloudClient {
     }
 
     func download(file: CloudFile, share: CloudShare?) async throws -> CloudDownload {
+        if let pan115 { return try await pan115.download(file: file, share: share) }
         if let c139 { return try await c139.download(file: file, share: share) }
         if let baidu { return try await baidu.download(file: file, share: share) }
         if let xunlei { return try await xunlei.download(file: file, share: share) }

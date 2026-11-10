@@ -3,3 +3,4 @@ YunX.xcodeproj/
 .DS_Store
 Tests/ilanzou-vectors.json
 Tests/c139-vectors.json
+Tests/pan115-vectors.json
