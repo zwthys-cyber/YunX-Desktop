@@ -23,7 +23,15 @@ enum Pan115Crypto {
         return Data(bytes)
     }
     private static func derive(_ seed: [UInt8], size: Int) -> [UInt8] {
-        (0..<size).map { (seed[$0 % seed.count] &+ table[size * $0]) ^ table[size * (size - 1 - $0)] }
+        var result = [UInt8]()
+        result.reserveCapacity(size)
+        for index in 0..<size {
+            let value = seed[index % seed.count]
+            let left = table[size * index]
+            let right = table[size * (size - 1 - index)]
+            result.append((value &+ left) ^ right)
+        }
+        return result
     }
     private static func xor(_ bytes: inout [UInt8], key: [UInt8]) {
         let offset = bytes.count % 4
