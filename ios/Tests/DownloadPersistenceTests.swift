@@ -2,7 +2,7 @@
 import XCTest
 @testable import YunX
 
-private final class HeldDownloadProtocol: URLProtocol {
+final class HeldDownloadProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { }

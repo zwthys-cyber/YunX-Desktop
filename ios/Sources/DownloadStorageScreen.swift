@@ -14,13 +14,13 @@ struct DownloadStorageScreen: View {
     @State private var message: String?
     var body: some View {
         Form {
-            Section("下载保存目录") {
+            Section {
                 Text(location)
                 Button("选择目录并迁移现有下载") { picking = true }.disabled(busy)
                 Button("迁回本机 YunX 目录") { selected = nil; confirming = true }.disabled(busy)
                 if busy { ProgressView("暂停任务、复制和 SHA-256 校验中…") }
                 if let message { Text(message).font(.footnote) }
-            } footer: {
+            } header: { Text("下载保存目录") } footer: {
                 Text("迁移普通下载、原生引擎文件与媒体成品，保持任务路径及断点记录。切换时暂停所有任务，完成后手动继续。请选择空间充足的本地目录，并保持应用在前台；云文件提供者或外置盘是否持续可用由 iOS 决定。")
             }
             Section("数据保护") {

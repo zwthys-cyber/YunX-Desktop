@@ -19,6 +19,15 @@ import (
 // profile. The callback is evaluated per HTTP request and is never serialized.
 type ProxyResolver interface { Resolve(rawURL string) string }
 
+func SetGlobalDownloadLimit(limit int) { base.YunxSetDownloadLimit(max(1, min(6, limit))) }
+func SetHTTPRestoring(value bool) { base.YunxSetHTTPRestoring(value) }
+func AvailableDownloadSlots() int { return base.YunxAvailableSlots() }
+func AcquireHTTPTask(id string, adopt bool) bool {
+    if id == "" || len(id) > 128 { return false }
+    return base.YunxAcquireSlot("session:"+id, adopt)
+}
+func ReleaseHTTPTask(id string) { base.YunxReleaseSlot("session:"+id) }
+
 func SetProxyResolver(resolver ProxyResolver) error {
     if resolver == nil { return errors.New("missing runtime proxy resolver") }
     base.SetRuntimeProxyResolver(func(request *http.Request) (*url.URL, error) {
@@ -67,13 +76,14 @@ func Invoke(method, path, query, body string) string {
     return rest.Dispatch(method, path, query, body)
 }
 
-func Stop() { rest.Stop() }
+func Stop() { rest.Stop(); base.YunxReleaseNativeSlots() }
 
 // Migration must observe close failures rather than relying on log-only Stop.
 func StopForStorage() error {
     var closeErr error
     if rest.Downloader != nil { closeErr = rest.Downloader.Close() }
     rest.Stop()
+    base.YunxReleaseNativeSlots()
     if closeErr != nil { return errors.New("engine files could not be closed safely") }
     return nil
 }

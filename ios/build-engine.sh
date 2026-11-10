@@ -20,14 +20,18 @@ mkdir -p "$engine_temp/gopeed/bind/yunxengine"
 cp Engine/mobile.go "$engine_temp/gopeed/bind/yunxengine/main.go"
 cp Engine/runtime_proxy.go "$engine_temp/gopeed/pkg/base/yunx_runtime_proxy.go"
 cp Engine/runtime_proxy_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_proxy_test.go"
+cp Engine/runtime_scheduler.go "$engine_temp/gopeed/pkg/base/yunx_runtime_scheduler.go"
+cp Engine/runtime_scheduler_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_scheduler_test.go"
+cp Engine/downloader_scheduler.go "$engine_temp/gopeed/pkg/download/yunx_scheduler.go"
 python3 Engine/patch-runtime-proxy.py "$engine_temp/gopeed"
+python3 Engine/patch-scheduler.py "$engine_temp/gopeed"
 cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
 go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_REV"
 # The pinned mobile tool changes the module graph; finalize all checksums before tests/vendor.
 go mod tidy
-go test -mod=mod -tags nosqlite -timeout 1m ./pkg/base -run '^TestYunxRuntimeProxy' -count=1
+go test -mod=mod -tags nosqlite -timeout 1m ./pkg/base -run '^TestYunx' -count=1
 # These upstream end-to-end tests use local httptest servers, not live platforms.
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
 gomobile init

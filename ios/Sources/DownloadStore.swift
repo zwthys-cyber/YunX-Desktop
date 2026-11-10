@@ -2,6 +2,7 @@
 import Foundation
 import Combine
 import UniformTypeIdentifiers
+import Yunxengine
 
 struct DownloadItem: Codable, Identifiable {
     enum State: String, Codable {
@@ -45,11 +46,13 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     @Published var maximumConcurrent = max(1, min(6, UserDefaults.standard.integer(forKey: "downloadConcurrency") == 0 ? 3 : UserDefaults.standard.integer(forKey: "downloadConcurrency"))) {
         didSet {
             UserDefaults.standard.set(maximumConcurrent, forKey: "downloadConcurrency")
+            YunxengineSetGlobalDownloadLimit(maximumConcurrent)
             drainQueue()
         }
     }
     private var active: [UUID: URLSessionDownloadTask] = [:]
     private var latestTaskIdentity: [UUID: ObjectIdentifier] = [:]
+    private var transferSlots: [UUID: String] = [:]
     private var removed = Set<UUID>()
     private let root: URL
     private let cache: URL
@@ -70,6 +73,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     init(root: URL, cache: URL, configuration: URLSessionConfiguration = .default, backgroundEnabled: Bool = false) {
         self.root = root; self.cache = cache
         super.init()
+        YunxengineSetGlobalDownloadLimit(maximumConcurrent)
         do {
             if backgroundEnabled { try DownloadStorage.prepare() }
             let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
@@ -99,6 +103,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         session = NetworkProxy.session(configuration: config, delegate: self, delegateQueue: .main)
         if backgroundEnabled {
             restoringBackground = true
+            YunxengineSetHTTPRestoring(true)
             let background = URLSessionConfiguration.background(withIdentifier: BackgroundDownloadPolicy.identifier)
             background.sessionSendsLaunchEvents = true
             background.isDiscretionary = false
@@ -163,13 +168,19 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         retryWake?.cancel(); retryWake = nil
         let now = Date()
         for id in items.reversed().filter({ $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }).map(\.id) {
-            guard active.count < max(1, min(6, maximumConcurrent)) else { break }
+            guard active.count < max(1, min(6, maximumConcurrent)), YunxengineAvailableDownloadSlots() > 0 else { break }
             launch(id)
         }
         if let date = items.filter({ $0.state == .waiting }).compactMap(\.retryAt).filter({ $0 > now }).min() {
             let work = DispatchWorkItem { [weak self] in self?.drainQueue() }
             retryWake = work
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, date.timeIntervalSinceNow), execute: work)
+        }
+        if active.count < max(1, min(6, maximumConcurrent)), items.contains(where: { $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }) {
+            retryWake?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.drainQueue() }
+            retryWake = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
         }
     }
     func refreshForegroundNetworking() {
@@ -221,6 +232,9 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
         let usesBackground = backgroundSession != nil && BackgroundDownloadPolicy.allows(items[index].url, headers: headers)
         let targetSession = usesBackground ? backgroundSession! : session!
+        let slot = id.uuidString + "." + UUID().uuidString
+        guard YunxengineAcquireHTTPTask(slot, false) else { return }
+        transferSlots[id] = slot
         let task: URLSessionDownloadTask
         if let resume = try? Data(contentsOf: resumeURL(id)) {
             task = targetSession.downloadTask(withResumeData: resume)
@@ -236,6 +250,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         items[index].error = nil
         guard save() else {
             active.removeValue(forKey: id)
+            releaseSlot(id)
             task.taskDescription = nil
             task.cancel()
             items[index].state = .failed
@@ -246,7 +261,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     private func restoreBackground(_ tasks: [URLSessionTask]) {
-        defer { restoringBackground = false; restorableBackground.removeAll(); drainQueue() }
+        defer { restoringBackground = false; YunxengineSetHTTPRestoring(false); restorableBackground.removeAll(); drainQueue() }
         guard !unreadableIndex else { tasks.forEach { $0.cancel() }; return }
         for candidate in tasks {
             guard let task = candidate as? URLSessionDownloadTask, let raw = task.taskDescription, let id = UUID(uuidString: raw),
@@ -256,6 +271,9 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             guard active[id] == nil else { task.cancel(); continue }
             active[id] = task
             latestTaskIdentity[id] = ObjectIdentifier(task)
+            let slot = id.uuidString + "." + UUID().uuidString
+            _ = YunxengineAcquireHTTPTask(slot, true)
+            transferSlots[id] = slot
             if restorableBackground.contains(id) {
                 items[index].state = .downloading; items[index].error = nil
                 items[index].received = max(items[index].received, task.countOfBytesReceived)
@@ -282,6 +300,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 guard self.items[index].state != .completed else { return }
                 self.writeResume(data, id: id)
                 self.active.removeValue(forKey: id)
+                self.releaseSlot(id)
                 self.items[index].state = .paused
                 self.save()
                 self.drainQueue()
@@ -309,8 +328,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         items.removeAll { $0.id == id }
         guard save() else { items = previous; return }
         removed.insert(id)
-        active.removeValue(forKey: id)?.cancel()
-        latestTaskIdentity.removeValue(forKey: id)
+        if let task = active.removeValue(forKey: id) { task.cancel() }
+        else { latestTaskIdentity.removeValue(forKey: id) }
         try? manager.removeItem(at: resumeURL(id))
         DownloadHeaders.delete(id)
         // 下载完成的文件保留，删除记录不会隐式删除用户文件。
@@ -339,6 +358,9 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     private func resumeURL(_ id: UUID) -> URL {
         cache.appendingPathComponent("\(id.uuidString).resume")
+    }
+    private func releaseSlot(_ id: UUID) {
+        if let slot = transferSlots.removeValue(forKey: id) { YunxengineReleaseHTTPTask(slot) }
     }
 
     private func writeResume(_ data: Data?, id: UUID) {
@@ -486,6 +508,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard let value = task.taskDescription, let id = UUID(uuidString: value) else { return }
         if let latest = latestTaskIdentity[id], latest != ObjectIdentifier(task) { return }
         active.removeValue(forKey: id)
+        releaseSlot(id)
+        if removed.contains(id) { latestTaskIdentity.removeValue(forKey: id) }
         defer { drainQueue() }
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
         if items[index].state == .completed { save(); return }

@@ -96,7 +96,7 @@ struct DownloadScreen: View {
                         Button("全部暂停") { store.pauseAll() }.buttonStyle(.bordered)
                         Button("全部继续") { store.resumeAll() }.buttonStyle(.bordered)
                     }
-                    Stepper("同时下载：\(store.maximumConcurrent)", value: $store.maximumConcurrent, in: 1...6)
+                    Stepper("全局同时传输：\(store.maximumConcurrent)", value: $store.maximumConcurrent, in: 1...6)
                 }
                 Section("任务") {
                     if store.items.isEmpty {

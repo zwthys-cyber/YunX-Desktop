@@ -134,7 +134,9 @@ struct P2PScreen: View {
             }
             Section("引擎设置") {
                 Toggle("DHT（重启应用后生效）", isOn: $dht)
-                Stepper("同时任务：\(parallel)", value: $parallel, in: 1...6)
+                Stepper("原生引擎同时传输：\(parallel)", value: $parallel, in: 1...6)
+                Text("同时受「设置与收藏」中的全局传输上限约束。媒体轨道和原生文件任务共用此子上限。")
+                    .font(.footnote).foregroundStyle(.secondary)
                 TextField("Tracker 地址，每行一条", text: $trackers, axis: .vertical).lineLimit(3...8).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("保存到引擎") {
                     Task {
