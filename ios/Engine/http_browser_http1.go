@@ -5,6 +5,7 @@ import (
     "context"
     "crypto/tls"
     "net"
+    "strings"
 
     "github.com/imroc/req/v3"
     utls "github.com/refraction-networking/utls"
@@ -19,8 +20,11 @@ func yunxBrowserHTTP1(client *req.Client, browser Browser) {
     case BrowserSafari: hello = utls.HelloSafari_16_0
     }
     client.SetTLSHandshake(func(ctx context.Context, address string, plain net.Conn) (net.Conn, *tls.ConnectionState, error) {
-        host, _, err := net.SplitHostPort(address)
-        if err != nil { return nil, nil, err }
+        // req passes tlsHost() (usually just a hostname); custom callers may
+        // provide host:port. Handle both, including bracketed/raw IPv6.
+        host := address
+        if value, _, err := net.SplitHostPort(address); err == nil { host = value }
+        host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
         source := client.GetTLSClientConfig()
         if source.ServerName != "" { host = source.ServerName }
         config := &utls.Config{
