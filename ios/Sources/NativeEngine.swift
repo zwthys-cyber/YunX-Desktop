@@ -11,7 +11,7 @@ struct EngineTask: Decodable, Identifiable {
     struct Metadata: Decodable {
         struct Request: Decodable { let labels: [String: String]? }
         let req: Request?
-        struct Options: Decodable { let path: String? }
+        struct Options: Decodable { let path: String?; let name: String? }
         struct Resource: Decodable { let size: Int64? }
         let opts: Options?
         let res: Resource?
@@ -367,7 +367,16 @@ actor NativeEngine {
         guard task.status == "done", let path = task.meta?.opts?.path else { return [] }
         let root = downloads.resolvingSymlinksInPath().standardizedFileURL
         let folder = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
-        guard folder.path.hasPrefix(root.path + "/"),
+        guard folder.path.hasPrefix(root.path + "/") else { return [] }
+        // HTTP has one declared output. Include legitimate repository dotfiles
+        // without exposing unrelated hidden state from a native task folder.
+        if task.protocol.lowercased() == "http", let name = task.meta?.opts?.name, !name.isEmpty,
+           name == FileNamePolicy.name(name, maxBytes: 255) {
+            let output = folder.appendingPathComponent(name).resolvingSymlinksInPath().standardizedFileURL
+            if output.deletingLastPathComponent().path == folder.path,
+               (try? output.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true { return [output] }
+        }
+        guard
               let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
         var files: [URL] = []
         for case let file as URL in enumerator {

@@ -404,6 +404,7 @@ struct GitHubRepositoryScreen: View {
     var body: some View {
         List {
             if let parent = detail?.parent { Text("Fork 自 " + parent.full_name).foregroundStyle(.secondary) }
+            GitHubTransferSettings()
             if let message { Text(message).foregroundStyle(.secondary) }
             TextField("分支/标签/提交（留空使用默认分支）", text: $reference).textInputAutocapitalization(.never).autocorrectionDisabled()
             if repo.initialFile {
@@ -412,14 +413,14 @@ struct GitHubRepositoryScreen: View {
             if !repo.initialPath.isEmpty { NavigationLink("仓库根目录") { GitHubDirectoryScreen(repo: selected, client: client, downloads: downloads, path: "") } }
             NavigationLink("README") { GitHubReadmeScreen(repo: selected, client: client) }
             NavigationLink("Releases") { GitHubReleasesScreen(repo: selected, client: client, downloads: downloads) }
-            Button(downloadingArchive ? "正在准备 ZIP…" : "下载所选分支 ZIP") {
+            GitHubTransferButton(downloadingArchive ? "正在准备 ZIP…" : "下载所选分支 ZIP") { choice in
                 let snapshot = selected
                 downloadingArchive = true
                 Task { @MainActor in
                     defer { downloadingArchive = false }
                     do {
                         let plan = try await client.archiveDownload(snapshot)
-                        message = downloads.add(plan.url, filename: plan.filename, headers: plan.headers, expectedMedia: "zip") ? "ZIP 已加入下载" : downloads.storageError
+                        message = try await GitHubFileTransfer.enqueue(plan, choice: choice, store: downloads, zip: true, mirrors: false)
                     } catch { if !Task.isCancelled { message = error.localizedDescription } }
                 }
             }.disabled(downloadingArchive)
@@ -448,6 +449,7 @@ struct GitHubDirectoryScreen: View {
     var body: some View {
         List {
             if loading { ProgressView() }
+            GitHubTransferSettings()
             if let message { Text(message).foregroundStyle(.secondary) }
             if !effectivePath.isEmpty {
                 NavigationLink("上一级目录") { GitHubDirectoryScreen(repo: repo, client: client, downloads: downloads, path: (effectivePath as NSString).deletingLastPathComponent) }
@@ -465,7 +467,7 @@ struct GitHubDirectoryScreen: View {
                         entryLabel(entry, symbol: "folder")
                     }
                 } else if entry.type == "file" {
-                    Button { Task { await download(entry) } } label: { entryLabel(entry, symbol: "arrow.down.doc") }
+                    GitHubTransferButton { choice in Task { await download(entry, choice: choice) } } label: { entryLabel(entry, symbol: "arrow.down.doc") }
                         .disabled(pending.contains(entry.path))
                 } else { Label(entry.name + "（不支持下载）", systemImage: "doc") }
             }
@@ -510,13 +512,12 @@ struct GitHubDirectoryScreen: View {
             }
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
-    @MainActor private func download(_ entry: GitHubEntry) async {
+    @MainActor private func download(_ entry: GitHubEntry, choice: GitHubTransferChoice) async {
         guard pending.insert(entry.path).inserted else { return }
         defer { pending.remove(entry.path) }
         do {
             let plan = try await client.fileDownload(repo, path: entry.path)
-            let routed = try await GitHubMirrorSelector.shared.plan(plan)
-            message = downloads.add(routed.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size, originFallback: routed.origin) ? "已加入下载：" + plan.filename : downloads.storageError
+            message = try await GitHubFileTransfer.enqueue(plan, choice: choice, store: downloads)
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
 }
@@ -532,22 +533,22 @@ struct GitHubFileScreen: View {
     var body: some View {
         List {
             Text(path).font(.footnote)
+            GitHubTransferSettings()
             if let entry { Text(ByteCountFormatter.string(fromByteCount: entry.size, countStyle: .file)) }
             if let message { Text(message) }
-            Button("下载文件") { Task { await download() } }.disabled(busy || entry == nil)
+            GitHubTransferButton("下载文件") { choice in Task { await download(choice: choice) } }.disabled(busy || entry == nil)
             if busy { ProgressView() }
         }.navigationTitle((path as NSString).lastPathComponent).task {
             do { entry = try await client.entry(repo, path: path) }
             catch { if !Task.isCancelled { message = error.localizedDescription } }
         }
     }
-    @MainActor private func download() async {
+    @MainActor private func download(choice: GitHubTransferChoice) async {
         guard !busy else { return }
         busy = true; defer { busy = false }
         do {
             let plan = try await client.fileDownload(repo, path: path)
-            let routed = try await GitHubMirrorSelector.shared.plan(plan)
-            message = downloads.add(routed.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size, originFallback: routed.origin) ? "已加入下载。" : downloads.storageError
+            message = try await GitHubFileTransfer.enqueue(plan, choice: choice, store: downloads)
         } catch { if !Task.isCancelled { message = error.localizedDescription } }
     }
 }
@@ -628,18 +629,18 @@ struct GitHubReleasesScreen: View {
     @State private var message: String?
     var body: some View {
         List {
+            GitHubTransferSettings()
             if let message { Text(message).foregroundStyle(.secondary) }
             ForEach(releases) { release in
                 Section(release.name ?? release.tag_name) {
                     Text(release.tag_name).font(.caption)
                     if let body = release.body { Text(body).textSelection(.enabled) }
                     ForEach(release.assets) { asset in
-                        Button {
+                        GitHubTransferButton { choice in
                             Task {
                                 do {
                                     let plan = try await client.releaseDownload(repo, asset: asset)
-                                    let routed = try await GitHubMirrorSelector.shared.plan(plan)
-                                    message = downloads.add(routed.url, filename: plan.filename, headers: plan.headers, expectedSize: plan.size, originFallback: routed.origin) ? "已加入下载：" + asset.name : downloads.storageError
+                                    message = try await GitHubFileTransfer.enqueue(plan, choice: choice, store: downloads)
                                 } catch { message = error.localizedDescription }
                             }
                         } label: { Label(asset.name, systemImage: "arrow.down.circle") }

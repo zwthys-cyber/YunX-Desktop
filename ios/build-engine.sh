@@ -81,7 +81,7 @@ engine_retry go mod tidy
 go test -mod=mod -tags nosqlite -timeout 1m ./pkg/base -run '^TestYunx' -count=1
 go test -mod=mod -tags nosqlite -timeout 1m ./internal/httpclient -run '^TestYunx' -count=1
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/http \
-  -run '^Test(YunxPrefetch.*|YunxRuntimeHeaders.*|YunxExpectedSize.*|YunxSlowHTTP.*|YunxCloudSource.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
+  -run '^Test(YunxPrefetch.*|YunxRuntimeHeaders.*|YunxExpectedSize.*|YunxExpectedMedia.*|YunxSlowHTTP.*|YunxCloudSource.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
 # These upstream end-to-end tests use local httptest servers, not live platforms.
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
 engine_retry gomobile init

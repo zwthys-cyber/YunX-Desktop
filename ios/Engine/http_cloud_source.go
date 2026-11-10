@@ -32,7 +32,7 @@ func (f *Fetcher) YunxRebindCloudSource(req *base.Request, expectedSize int64) (
     defer f.connMu.Unlock()
     state := f.getState()
     if state != statePaused && state != stateResolved && state != stateError { return false, nil }
-    if f.meta == nil || f.meta.Req == nil || f.meta.Opts == nil || f.meta.Res == nil || len(f.meta.Res.Files) != 1 ||
+    if f.meta == nil || f.meta.Req == nil || f.meta.Opts == nil || f.meta.Res == nil || len(f.meta.Res.Files) != 1 || f.meta.Res.Files[0] == nil ||
         !f.meta.Res.Range || !f.hasKnownSize() || expectedSize <= 0 || f.knownSize() != expectedSize ||
         !isStrongETag(f.ifRange) || !f.rangeValidatorPinned || f.checksumFailed.Load() {
         return false, nil

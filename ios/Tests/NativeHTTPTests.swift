@@ -141,6 +141,24 @@ final class NativeHTTPFixture {
 
 @MainActor
 final class NativeHTTPTests: XCTestCase {
+    func testZIPPolicyReachesTheNativeRequestAndCannotBeOverriddenByLabels() throws {
+        let request = try NativeHTTPSRequest(text: "https://files.example.test/archive.zip", labels: ["yunxExpectedMedia": "other"], expectedMedia: "zip")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: request.body(folder: URL(fileURLWithPath: "/tmp/fixture"))) as? [String: Any])
+        let req = try XCTUnwrap(root["req"] as? [String: Any])
+        XCTAssertEqual((req["labels"] as? [String: String])?["yunxExpectedMedia"], "zip")
+        XCTAssertThrowsError(try NativeHTTPSRequest(text: "https://files.example.test/data", expectedMedia: "unimplemented-format"))
+    }
+    func testDeclaredHTTPDotfileCanBeExportedWithoutUnrelatedHiddenFiles() throws {
+        let folder = NativeEngine.shared.downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("build/\n".utf8).write(to: folder.appendingPathComponent(".gitignore"))
+        try Data("private internal state".utf8).write(to: folder.appendingPathComponent(".unrelated"))
+        let value: [String: Any] = ["id": UUID().uuidString, "name": ".gitignore", "status": "done", "protocol": "http",
+            "meta": ["opts": ["path": folder.path, "name": ".gitignore"]]]
+        let task = try JSONDecoder().decode(EngineTask.self, from: JSONSerialization.data(withJSONObject: value))
+        XCTAssertEqual(NativeEngine.shared.completedFiles(task).map(\.lastPathComponent), [".gitignore"])
+    }
     func testPrivateRequestBodyContainsOnlyCredentialIDAndExpectedSize() throws {
         let context = UUID()
         let request = try NativeHTTPSRequest(text: "https://files.example.test/private.bin", headers: ["Authorization": "Bearer private-body-fixture"], accountHeaders: true, expectedSize: 123456)
