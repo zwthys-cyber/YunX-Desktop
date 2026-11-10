@@ -44,6 +44,12 @@ func SetHTTPRestoring(value bool) { base.YunxSetHTTPRestoring(value) }
 func SetNativeHTTPBandwidthLimit(bytesPerSecond int64) error { return base.YunxSetNativeHTTPBandwidthLimit(bytesPerSecond) }
 func SetNativeHTTPTransport(http2 bool, bufferKiB int) error { return base.YunxSetNativeHTTPTransport(http2, bufferKiB) }
 func SetNativeHTTPSlowConnections(enabled bool, minimumKiB, seconds int) error { return base.YunxSetNativeHTTPSlowConnections(enabled, minimumKiB, seconds) }
+func RebindCloudHTTPSource(id, expectedContext string, size int64, requestJSON string) string {
+    updated, err := rest.RebindCloudHTTPSource(id, expectedContext, size, requestJSON)
+    if err != nil { return `{"code":1002,"msg":"cloud source changed or could not be saved"}` }
+    value, _ := json.Marshal(map[string]any{"code": 0, "data": updated})
+    return string(value)
+}
 func AvailableDownloadSlots() int { return base.YunxAvailableSlots() }
 func AcquireHTTPTask(id string, adopt bool) bool {
     if id == "" || len(id) > 128 { return false }

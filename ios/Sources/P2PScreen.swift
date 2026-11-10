@@ -76,7 +76,7 @@ final class P2PStore: ObservableObject {
             await refresh()
         } catch { message = "引擎操作失败，请刷新任务后重试。" }
     }
-    func refreshCloud(_ task: EngineTask, vault: CredentialVault) async {
+    func refreshCloud(_ task: EngineTask, vault: CredentialVault, resumeIfSafe: Bool = false) async {
         guard !busy else { return }
         busy = true; message = nil
         defer { busy = false }
@@ -91,8 +91,22 @@ final class P2PStore: ObservableObject {
             }
             let (plan, updated) = try await context.refreshed(vault: vault)
             try Task.checkCancellation()
+            guard let latest = try await NativeEngine.shared.tasks().first(where: { $0.id == task.id }),
+                  latest.meta?.req?.labels?[CloudTransferContext.label] == contextID.uuidString else {
+                throw CloudError.message("原任务或来源记录已改变，请刷新后重试。")
+            }
+            if ["running", "wait", "ready"].contains(latest.status) {
+                _ = try await NativeEngine.shared.invoke("PUT", path: "/api/v1/tasks/" + escaped + "/pause")
+            }
+            if resumeIfSafe, try await NativeEngine.shared.rebindCloudSourceIfSafe(latest, plan: plan, context: updated) {
+                try Task.checkCancellation()
+                _ = try await NativeEngine.shared.invoke("PUT", path: "/api/v1/tasks/" + escaped + "/continue")
+                message = "直链已刷新，已保留原片段并使用强 ETag 核对后续响应；如资源已改变，可选择从头下载。"
+                await refresh()
+                return
+            }
             _ = try await NativeEngine.shared.createCloudHTTPS(plan, context: updated)
-            message = "已重新取链并创建新任务；旧任务保持停止，旧片段不会混入新文件。可核对后删除旧记录。"
+            message = "已重新取链并创建新任务；旧任务和片段保留，新文件不混用旧片段。可核对后删除旧记录。"
             await refresh()
         } catch { message = error is CloudError ? error.localizedDescription : "刷新直链失败，旧任务和文件已保留，请重新解析原目录。" }
     }
@@ -245,14 +259,18 @@ struct P2PScreen: View {
                     deleting = nil
                 }
             }
-            .confirmationDialog("重新取链并从头下载？", isPresented: Binding(get: { refreshingCloud != nil }, set: { if !$0 { refreshingCloud = nil } }), titleVisibility: .visible) {
+            .confirmationDialog("刷新网盘直链？", isPresented: Binding(get: { refreshingCloud != nil }, set: { if !$0 { refreshingCloud = nil } }), titleVisibility: .visible) {
+                Button("尝试安全续传") {
+                    if let task = refreshingCloud { Task { await store.refreshCloud(task, vault: vault, resumeIfSafe: true) } }
+                    refreshingCloud = nil
+                }
                 Button("重新取链并下载") {
                     if let task = refreshingCloud { Task { await store.refreshCloud(task, vault: vault) } }
                     refreshingCloud = nil
                 }
                 Button("取消", role: .cancel) { refreshingCloud = nil }
             } message: {
-                Text("使用原任务账号重新读取目录和下载链接，不自动换账号或转存。旧任务会停止，新任务从头下载；蓝奏个人文件会重新生成公开分享链接。仍使用原连接数，超过 32 时可能触发平台限流或增加资源占用。")
+                Text("使用原账号重新读取目录及链接，不自动换账号或转存。安全续传仅在已有部分数据、大小一致且有强 ETag 时更新原任务；否则创建新任务从头下载。蓝奏个人文件会重新生成公开分享。仍使用原连接数，超过 32 时可能触发平台限流或增加资源占用。")
             }
     }
 }

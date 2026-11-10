@@ -281,6 +281,58 @@ actor NativeEngine {
             return task
         } catch { CloudTransferContexts.shared.delete(id); throw error }
     }
+    func rebindCloudSourceIfSafe(_ task: EngineTask, plan: CloudDownload, context: CloudTransferContext) async throws -> Bool {
+        guard !DownloadStorage.isMigrating else { throw DownloadStorageError.busy }
+        guard let oldCloudRaw = task.meta?.req?.labels?[CloudTransferContext.label], let oldCloud = UUID(uuidString: oldCloudRaw), plan.size > 0 else { return false }
+        try await ensureStarted()
+        let newCloud = UUID()
+        let oldHeader = (task.meta?.req?.labels?[NativeRequestHeaders.label]).flatMap { UUID(uuidString: $0) }
+        let privateRequest = plan.headers.keys.contains { ["cookie", "authorization"].contains($0.lowercased()) }
+        let newHeader = privateRequest ? UUID() : nil
+        var attempted = false
+        do {
+            try CloudTransferContexts.shared.save(context, id: newCloud)
+            if let newHeader { try NativeRequestHeaders.shared.save(plan.headers, original: plan.url, id: newHeader) }
+            let request = try NativeHTTPSRequest(text: plan.url.absoluteString, filename: context.filename,
+                connections: context.connections, headers: plan.headers, labels: [CloudTransferContext.label: newCloud.uuidString],
+                accountHeaders: true, expectedSize: plan.size)
+            let root = try JSONSerialization.jsonObject(with: request.body(folder: downloads, headerContext: newHeader)) as? [String: Any]
+            guard var replacement = root?["req"] as? [String: Any] else { throw CloudTransferContext.unavailable }
+            var labels = replacement["labels"] as? [String: String] ?? [:]
+            labels[NativeRequestHeaders.label] = newHeader?.uuidString ?? ""
+            replacement["labels"] = labels
+            let data = try JSONSerialization.data(withJSONObject: replacement)
+            guard let json = String(data: data, encoding: .utf8) else { throw CloudTransferContext.unavailable }
+            try Task.checkCancellation()
+            guard !DownloadStorage.isMigrating else { throw DownloadStorageError.busy }
+            activeOperations += 1
+            attempted = true
+            let raw = await Task.detached(priority: .utility) { YunxengineRebindCloudHTTPSource(task.id, oldCloud.uuidString, plan.size, json) }.value
+            activeOperations -= 1
+            guard let bytes = raw.data(using: .utf8), let result = try? JSONDecoder().decode(EngineEnvelope<Bool>.self, from: bytes), result.code == 0, let updated = result.data else {
+                throw CloudError.message("任务来源已改变或无法保存，请刷新任务列表后重试。")
+            }
+            if !updated {
+                CloudTransferContexts.shared.delete(newCloud)
+                if let newHeader { NativeRequestHeaders.shared.delete(newHeader) }
+                return false
+            }
+            cloudContextsByTask[task.id] = newCloud
+            if let newHeader { headerContextsByTask[task.id] = newHeader }
+            else { headerContextsByTask.removeValue(forKey: task.id) }
+            CloudTransferContexts.shared.delete(oldCloud)
+            if let oldHeader, oldHeader != newHeader { NativeRequestHeaders.shared.delete(oldHeader) }
+            return true
+        } catch {
+            // A persistence failure may follow an in-memory Go update. Keep
+            // both vault versions when the operation's outcome is ambiguous.
+            if !attempted {
+                CloudTransferContexts.shared.delete(newCloud)
+                if let newHeader { NativeRequestHeaders.shared.delete(newHeader) }
+            }
+            throw error
+        }
+    }
     func createHLS(_ asset: MediaAsset) async throws {
         guard asset.isHLS, asset.url.scheme == "https", asset.url.pathExtension.lowercased() == "m3u8",
               !asset.headers.keys.contains(where: { ["cookie", "authorization", "proxy-authorization"].contains($0.lowercased()) }) else {
