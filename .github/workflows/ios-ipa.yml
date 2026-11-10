@@ -5,6 +5,7 @@ on:
     branches: [ios-port]
     paths:
       - 'ios/**'
+      - '!ios/**/*.md'
       - '.github/workflows/ios-ipa.yml'
   workflow_dispatch:
     inputs:

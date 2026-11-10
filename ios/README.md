@@ -18,7 +18,7 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 工作流同时保存测试结果、构建日志、原生引擎对应源码和版本信息。失败时先查看出错步骤，再查看 `YunX-iOS-build-log` 等产物；不要把失败运行或旧提交的 IPA 当作最新交付。
 
-所有构建、自动测试和打包均在 GitHub 托管 macOS 运行机完成。当前服务器只读取、编辑和推送源码，不执行构建或验证脚本。修改 `ios/**` 或 `.github/workflows/ios-ipa.yml` 并推送到 `ios-port` 会触发流程，也可在 Actions 手动运行。
+所有构建、自动测试和打包均在 GitHub 托管 macOS 运行机完成。当前服务器只读取、编辑和推送源码，不执行构建或验证脚本。修改 `ios/` 下的源码、资源或 `.github/workflows/ios-ipa.yml` 并推送到 `ios-port` 会触发流程；仅更新 Markdown 文档不重新编译，也可在 Actions 手动运行。
 
 ## 网盘与账号
 
