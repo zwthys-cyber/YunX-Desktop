@@ -20,6 +20,7 @@ targets:
         embed: false
       - sdk: libc++.tbd
       - sdk: libresolv.tbd
+      - sdk: libz.tbd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.zwthys.yunx

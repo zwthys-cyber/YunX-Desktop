@@ -56,7 +56,8 @@ struct CloudHomeScreen: View {
                             error = nil
                             var canonical = URLComponents()
                             canonical.scheme = "https"; canonical.host = share.provider.webHost
-                            canonical.path = "/s/" + share.shareID
+                            canonical.path = share.provider == .c139 ? "/shareweb/" : "/s/" + share.shareID
+                            if share.provider == .c139 { canonical.fragment = "/w/i/" + share.shareID }
                             if !share.passcode.isEmpty { canonical.queryItems = [URLQueryItem(name: "pwd", value: share.passcode)] }
                             if let url = canonical.url { library.record(platform: provider.rawValue, text: url.absoluteString) }
                             route = CloudRoute(provider: provider, account: selected, share: share)

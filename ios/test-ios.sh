@@ -10,6 +10,7 @@ cd -- "$(dirname -- "$0")"
 command -v java >/dev/null || { echo "需要 JDK 17+ 生成备份兼容测试向量。" >&2; exit 1; }
 java Fixtures/BackupFixture.java > Tests/backup-vectors.json
 java Fixtures/ILanzouFixture.java > Tests/ilanzou-vectors.json
+java Fixtures/C139Fixture.java > Tests/c139-vectors.json
 xcodegen generate
 mkdir -p build
 simulator_id="$(xcrun simctl list devices available --json | python3 -c '
