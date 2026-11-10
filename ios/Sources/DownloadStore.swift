@@ -173,10 +173,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     private func safeName(_ raw: String) -> String {
-        let filtered = raw.components(separatedBy: CharacterSet(charactersIn: "/\\:\0\n\r"))
-            .joined(separator: "_")
-        if filtered.isEmpty || filtered == "." || filtered == ".." { return "download.bin" }
-        return String(filtered.prefix(160))
+        FileNamePolicy.name(raw)
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,

@@ -11,6 +11,8 @@ struct YunXApp: App {
             TabView {
                 CloudHomeScreen(vault: vault, downloads: downloads)
                     .tabItem { Label("网盘", systemImage: "externaldrive") }
+                MediaScreen(vault: vault, downloads: downloads)
+                    .tabItem { Label("视频与图集", systemImage: "play.rectangle") }
                 DownloadScreen(store: downloads)
                     .tabItem { Label("下载", systemImage: "arrow.down.circle") }
                 AccountScreen(vault: vault)
@@ -93,12 +95,14 @@ struct DownloadScreen: View {
     }
 }
 
+@MainActor
 struct AccountScreen: View {
     @ObservedObject var vault: CredentialVault
     @State private var platform = "夸克"
     @State private var remark = ""
     @State private var secret = ""
     @State private var loginProvider: CloudProvider?
+    @State private var mediaLoginProvider: MediaProvider?
     @State private var verifyingID: UUID?
     @State private var verification: String?
     private let platforms = [
@@ -112,6 +116,9 @@ struct AccountScreen: View {
                 Section("网页登录") {
                     ForEach(CloudProvider.allCases) { provider in
                         Button("登录" + provider.rawValue) { loginProvider = provider }
+                    }
+                    ForEach(MediaProvider.allCases) { provider in
+                        Button("登录" + provider.rawValue) { mediaLoginProvider = provider }
                     }
                 }
                 if let verification {
@@ -128,7 +135,7 @@ struct AccountScreen: View {
                         vault.add(platform: platform, remark: remark, secret: secret)
                         if vault.message == nil { secret = ""; remark = "" }
                     }.disabled(secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Text("夸克和 UC 凭证已接入网盘浏览与取链；其他平台暂时仅存储。")
+                    Text("夸克、UC、哔哩哔哩和 Pixiv 已接入解析；其他平台暂时仅存储。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let message = vault.message {
@@ -143,20 +150,9 @@ struct AccountScreen: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if let provider = CloudProvider(rawValue: account.platform) {
-                                Button(verifyingID == account.id ? "验证中" : "验证") {
-                                    verifyingID = account.id
-                                    verification = nil
-                                    Task { @MainActor in
-                                        defer { verifyingID = nil }
-                                        do {
-                                            let client = CloudClient(provider: provider, cookie: account.secret,
-                                                                     cookieChanged: { vault.updateSecret(account.id, secret: $0) })
-                                            let name = try await client.validateAccount()
-                                            verification = "\(provider.rawValue)账号有效：\(name)"
-                                        } catch { verification = "账号验证失败，请检查登录状态与网络。" }
-                                    }
-                                }.disabled(verifyingID != nil).buttonStyle(.bordered)
+                            if CloudProvider(rawValue: account.platform) != nil || MediaProvider(rawValue: account.platform) != nil {
+                                Button(verifyingID == account.id ? "验证中" : "验证") { verify(account) }
+                                    .disabled(verifyingID != nil).buttonStyle(.bordered)
                             }
                             Button("删除", role: .destructive) { vault.delete(account.id) }
                         }
@@ -166,6 +162,28 @@ struct AccountScreen: View {
                 .sheet(item: $loginProvider) { provider in
                     CloudWebLogin(provider: provider, vault: vault)
                 }
+                .sheet(item: $mediaLoginProvider) { provider in
+                    MediaWebLogin(provider: provider, vault: vault)
+                }
+        }
+    }
+
+    private func verify(_ account: SavedCredential) {
+        verifyingID = account.id
+        verification = nil
+        Task { @MainActor in
+            defer { verifyingID = nil }
+            do {
+                let name: String
+                if let provider = CloudProvider(rawValue: account.platform) {
+                    let client = CloudClient(provider: provider, cookie: account.secret,
+                                             cookieChanged: { vault.updateSecret(account.id, secret: $0) })
+                    name = try await client.validateAccount()
+                } else if let provider = MediaProvider(rawValue: account.platform) {
+                    name = try await MediaClient().validate(provider: provider, cookie: account.secret)
+                } else { return }
+                verification = "\(account.platform)账号有效：\(name)"
+            } catch { verification = "账号验证失败，请检查登录状态与网络。" }
         }
     }
 }
@@ -182,6 +200,9 @@ struct PortStatusScreen: View {
                 Section("已编写，等待真机验证") {
                     Label("夸克 / UC 分享解析与个人目录", systemImage: "externaldrive")
                     Label("网页登录、账号验证与 Cookie 刷新", systemImage: "person.crop.circle")
+                    Label("B 站单文件解析、分 P 与画质", systemImage: "play.rectangle")
+                    Label("Pixiv 多页原图与批量下载", systemImage: "photo.on.rectangle")
+                    Label("原生 MP4 与图片预览", systemImage: "play.circle")
                     Label("HTTP(S) 直链前台下载", systemImage: "doc")
                     Label("暂停、断点数据保存、重试", systemImage: "pause.circle")
                     Label("任务记录与文件导出", systemImage: "square.and.arrow.up")
@@ -190,10 +211,10 @@ struct PortStatusScreen: View {
                 Section("尚未移植") {
                     ForEach([
                         "其他网盘适配、文件夹批量与转存管理",
-                        "七个视频平台解析与高清分轨",
+                        "其余视频平台、B 站 DASH 合轨及 Pixiv 动图",
                         "GitHub 仓库浏览、镜像和测速",
                         "多线程分片、校验、限速与多源下载",
-                        "HLS、DASH 合轨、Live Photo 与预览",
+                        "HLS、DASH 合轨与 Live Photo",
                         "BT、磁力、ed2k 与 Gopeed 引擎",
                         "其他平台网页登录、备份、历史、收藏与诊断",
                         "分享扩展、浏览器集成与后台下载"

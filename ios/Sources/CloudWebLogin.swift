@@ -73,8 +73,21 @@ struct CloudWebLogin: View {
 
 @MainActor
 struct CloudLoginWebView: UIViewRepresentable {
-    let provider: CloudProvider
+    let loginURL: URL
+    let userAgent: String
     @ObservedObject var state: WebLoginState
+
+    init(provider: CloudProvider, state: WebLoginState) {
+        loginURL = provider.loginURL
+        userAgent = provider.userAgent
+        _state = ObservedObject(wrappedValue: state)
+    }
+
+    init(loginURL: URL, userAgent: String, state: WebLoginState) {
+        self.loginURL = loginURL
+        self.userAgent = userAgent
+        _state = ObservedObject(wrappedValue: state)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
 
@@ -84,10 +97,10 @@ struct CloudLoginWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
-        webView.customUserAgent = provider.userAgent
+        webView.customUserAgent = userAgent
         webView.allowsBackForwardNavigationGestures = true
         state.webView = webView
-        webView.load(URLRequest(url: provider.loginURL))
+        webView.load(URLRequest(url: loginURL))
         return webView
     }
 
