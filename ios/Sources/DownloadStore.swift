@@ -93,9 +93,16 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 for index in items.indices {
                     if items[index].state == .completed { DownloadFileSave.discard(cache: cache, id: items[index].id) }
                     else if DownloadFileSave.pending(cache: cache, id: items[index].id) {
-                        items[index].pendingSave = true
-                        items[index].state = .paused
-                        restorableBackground.remove(items[index].id)
+                        if DownloadFileSave.bodyMissing(cache: cache, id: items[index].id) {
+                            items[index].pendingSave = nil
+                            items[index].state = .failed
+                            items[index].error = "完整文件未能保留，请重试或重新解析下载。"
+                            DownloadFileSave.discard(cache: cache, id: items[index].id)
+                        } else {
+                            items[index].pendingSave = true
+                            items[index].state = .paused
+                            restorableBackground.remove(items[index].id)
+                        }
                     }
                 }
                 try manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: index.path)
@@ -542,7 +549,13 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 notifyCompleted(size: output.size)
             case .failure(let error):
                 items[index].state = error is CancellationError ? .paused : .failed
-                items[index].error = error is CancellationError ? nil : "保存未完成，完整下载已保留。请检查目录权限和可用空间后继续。"
+                items[index].error = error is CancellationError ? nil : "保存未完成，下载缓存已保留。请检查目录权限和可用空间后继续。"
+                if DownloadFileSave.bodyMissing(cache: cache, id: id) {
+                    items[index].pendingSave = nil
+                    items[index].state = .failed
+                    items[index].error = "完整文件未能保留，请重试或重新解析下载。"
+                    DownloadFileSave.discard(cache: cache, id: id)
+                }
                 save()
             }
         }

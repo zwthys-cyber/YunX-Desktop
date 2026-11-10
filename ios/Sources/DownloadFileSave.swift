@@ -25,6 +25,15 @@ enum DownloadFileSave {
     static func pending(cache: URL, id: UUID) -> Bool {
         FileManager.default.fileExists(atPath: folder(cache, id).appendingPathComponent("receipt.json").path)
     }
+    static func bodyMissing(cache: URL, id: UUID) -> Bool {
+        do { _ = try FileManager.default.attributesOfItem(atPath: folder(cache, id).appendingPathComponent("body").path); return false }
+        catch {
+            let failure = error as NSError
+            // Permission/protection/provider errors must preserve the cache.
+            return (failure.domain == NSCocoaErrorDomain && [NSFileReadNoSuchFileError, NSFileNoSuchFileError].contains(failure.code)) ||
+                (failure.domain == NSPOSIXErrorDomain && failure.code == Int(ENOENT))
+        }
+    }
     static func discard(cache: URL, id: UUID) {
         try? FileManager.default.removeItem(at: folder(cache, id))
     }
@@ -32,12 +41,16 @@ enum DownloadFileSave {
                        kind: String?, mime: String?, requiredSize: Int64?) throws {
         let directory = folder(cache, id)
         // Never replace a previously retained complete body.
-        guard !FileManager.default.fileExists(atPath: directory.path) else {
-            throw CloudError.message("此任务已有待保存文件，请先继续保存。")
+        if FileManager.default.fileExists(atPath: directory.path) {
+            guard bodyMissing(cache: cache, id: id), !pending(cache: cache, id: id) else {
+                throw CloudError.message("此任务已有待保存文件，请先继续保存。")
+            }
+            try FileManager.default.removeItem(at: directory)
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
         do {
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: temporary.path)
             let receipt = Receipt(proposed: FileNamePolicy.name(proposed), kind: kind, mime: mime, requiredSize: requiredSize)
             try write(receipt, directory: directory)
             let body = directory.appendingPathComponent("body")
@@ -55,7 +68,7 @@ enum DownloadFileSave {
     }
     private static func regularSize(_ file: URL) throws -> Int64 {
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-        guard attributes[.type] as? FileAttributeType == .typeRegular,
+        guard attributes[.type] as? FileAttributeType == FileAttributeType.typeRegular,
               let size = attributes[.size] as? NSNumber else {
             throw CloudError.message("待保存路径不是普通文件。")
         }

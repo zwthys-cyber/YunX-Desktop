@@ -97,6 +97,22 @@ final class DownloadFileSaveTests: XCTestCase {
     }
 
     @MainActor
+    func testCrashBeforeBodyRenameDoesNotClaimARecoverableCompleteDownload() throws {
+        let (folder, root, cache, id, _) = try fixture()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.removeItem(at: cache.appendingPathComponent("CompletedBodies/" + id.uuidString + "/body"))
+        var item = DownloadItem(id: id, url: URL(string: "https://expired.invalid/file")!, filename: "result.bin", state: .saving)
+        item.pendingSave = true
+        try JSONEncoder().encode([item]).write(to: cache.appendingPathComponent("tasks.json"))
+        let store = DownloadStore(root: root, cache: cache, configuration: .ephemeral)
+        XCTAssertEqual(store.items.first?.state, .failed)
+        XCTAssertNil(store.items.first?.pendingSave)
+        XCTAssertTrue(store.items.first?.error?.contains("重新解析") == true)
+        XCTAssertFalse(DownloadFileSave.pending(cache: cache, id: id))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+    }
+
+    @MainActor
     func testStoreResumesRetainedSaveAfterRestartWithoutNetworkCredentials() async throws {
         for alreadyPublished in [false, true] {
             let (folder, root, cache, id, bytes) = try fixture()
