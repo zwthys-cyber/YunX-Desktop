@@ -116,7 +116,7 @@ jobs:
 
       - name: Show generated native networking bridge declarations
         shell: bash
-        run: find ios/Frameworks/Yunxengine.xcframework -name '*.h' -exec grep -nE 'ProxyResolver|resolve:|SetProxyResolver|SetNativeHTTPBandwidthLimit' {} +
+        run: find ios/Frameworks/Yunxengine.xcframework -name '*.h' -exec grep -nE 'ProxyResolver|resolve:|SetProxyResolver|SetNativeHTTPBandwidthLimit|HeaderResolver|headers:' {} +
 
       - name: Install JDK for desktop backup interoperability fixtures
         uses: actions/setup-java@v4

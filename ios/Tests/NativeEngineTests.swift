@@ -5,6 +5,34 @@ import CryptoKit
 
 @MainActor
 final class NativeEngineTests: XCTestCase {
+    func testSavedConcurrencyAndTrackersSurviveEngineRestart() async throws {
+        let previousParallel = UserDefaults.standard.object(forKey: "engineParallel")
+        let previousTrackers = UserDefaults.standard.object(forKey: "engineTrackers")
+        func restorePreferences() {
+            if let previousParallel { UserDefaults.standard.set(previousParallel, forKey: "engineParallel") }
+            else { UserDefaults.standard.removeObject(forKey: "engineParallel") }
+            if let previousTrackers { UserDefaults.standard.set(previousTrackers, forKey: "engineTrackers") }
+            else { UserDefaults.standard.removeObject(forKey: "engineTrackers") }
+        }
+        do {
+            try await NativeEngine.shared.quiesceForStorage()
+            UserDefaults.standard.set(1, forKey: "engineParallel")
+            UserDefaults.standard.set("http://127.0.0.1:9/announce", forKey: "engineTrackers")
+            let data = try await NativeEngine.shared.invoke("GET", path: "/api/v1/config")
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let config = try XCTUnwrap(root["data"] as? [String: Any])
+            XCTAssertEqual(config["maxRunning"] as? Int, 1)
+            let protocols = try XCTUnwrap(config["protocolConfig"] as? [String: Any])
+            let bt = try XCTUnwrap(protocols["bt"] as? [String: Any])
+            XCTAssertEqual(bt["customTrackers"] as? [String], ["http://127.0.0.1:9/announce"])
+            restorePreferences()
+            try await NativeEngine.shared.quiesceForStorage()
+        } catch {
+            restorePreferences()
+            try? await NativeEngine.shared.quiesceForStorage()
+            throw error
+        }
+    }
     func testP2PInputsRejectIncompleteOrUnrelatedLinks() throws {
         XCTAssertEqual(try P2PInput.link("magnet:?xt=urn:btih:0123456789012345678901234567890123456789"), "magnet:?xt=urn:btih:0123456789012345678901234567890123456789")
         XCTAssertNoThrow(try P2PInput.link("ed2k://|file|fixture.bin|3|0123456789abcdef0123456789abcdef|/"))

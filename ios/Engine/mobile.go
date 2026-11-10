@@ -18,6 +18,26 @@ import (
 // Implemented by Swift using iOS system proxy settings or the app's Keychain
 // profile. The callback is evaluated per HTTP request and is never serialized.
 type ProxyResolver interface { Resolve(rawURL string) string }
+type HeaderResolver interface { Headers(contextID, originalURL, targetURL string) string }
+
+func SetHeaderResolver(resolver HeaderResolver) error {
+    if resolver == nil { return errors.New("missing runtime header resolver") }
+    base.YunxSetRuntimeHeaderResolver(func(id, original, target string) (http.Header, error) {
+        raw := resolver.Headers(id, original, target)
+        if len(raw) > 128*1024 { return nil, errors.New("invalid runtime header response") }
+        var result struct {
+            Error bool `json:"error"`
+            Headers map[string]string `json:"headers"`
+        }
+        if json.Unmarshal([]byte(raw), &result) != nil || result.Error || result.Headers == nil {
+            return nil, errors.New("runtime credentials unavailable")
+        }
+        headers := http.Header{}
+        for key, value := range result.Headers { headers[key] = []string{value} }
+        return headers, nil
+    })
+    return nil
+}
 
 func SetGlobalDownloadLimit(limit int) { base.YunxSetDownloadLimit(max(1, min(6, limit))) }
 func SetHTTPRestoring(value bool) { base.YunxSetHTTPRestoring(value) }

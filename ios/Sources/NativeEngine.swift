@@ -39,6 +39,8 @@ actor NativeEngine {
     static let shared = NativeEngine()
     private var startup: Task<Void, Error>?
     private var proxyResolver: IOSProxyResolver?
+    private var headerResolver: IOSHeaderResolver?
+    private var headerContextsByTask: [String: UUID] = [:]
     private var activeOperations = 0
     private var watchedCompletions = Set<String>()
     private var completionMonitor: Task<Void, Never>?
@@ -52,12 +54,18 @@ actor NativeEngine {
         _ = try NetworkProxy.current()
         let resolver = IOSProxyResolver()
         proxyResolver = resolver
+        let headers = IOSHeaderResolver()
+        headerResolver = headers
         let root = support
         let destination = downloads
         let dht = UserDefaults.standard.bool(forKey: "engineDHT")
+        let savedParallel = UserDefaults.standard.integer(forKey: "engineParallel")
+        let parallel = max(1, min(6, savedParallel == 0 ? 3 : savedParallel))
+        let trackers = try P2PInput.trackers(UserDefaults.standard.string(forKey: "engineTrackers") ?? "")
         let operation = Task.detached(priority: .utility) {
             try DownloadStorage.prepare()
             try Self.bindProxy(resolver)
+            try Self.bindHeaderResolver(headers)
             for folder in [root, destination] {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                     attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
@@ -66,9 +74,9 @@ actor NativeEngine {
                 "apiEnable": false, "mcpEnable": false, "storage": "bolt", "storageDir": root.path,
                 // Gopeed uses filepath.Match, not recursive containment. Every task owns one UUID child.
                 "tempDir": root.appendingPathComponent("Cache").path, "whiteDownloadDirs": [destination.path, destination.path + "/*"],
-                "downloadConfig": ["downloadDir": destination.path, "maxRunning": 3, "autoStartTasks": false, "proxy": ["enable": false],
+                "downloadConfig": ["downloadDir": destination.path, "maxRunning": parallel, "autoStartTasks": false, "proxy": ["enable": false],
                     "protocolConfig": ["bt": ["disableDht": !dht, "disablePex": true, "autoUpdateTrackers": false,
-                        "customTrackers": [], "trackerSubscribeUrls": [], "seedKeep": false, "seedRatio": 0, "seedTime": 0]]]
+                        "customTrackers": trackers, "trackerSubscribeUrls": [], "seedKeep": false, "seedRatio": 0, "seedTime": 0]]]
             ]
             let data = try JSONSerialization.data(withJSONObject: config)
             guard let json = String(data: data, encoding: .utf8) else { throw CloudError.message("引擎配置无效。") }
@@ -78,11 +86,15 @@ actor NativeEngine {
         }
         startup = operation
         do { try await operation.value; await Diagnostics.shared.record(.engineStarted) }
-        catch { startup = nil; proxyResolver = nil; await Diagnostics.shared.record(.engineStartFailed); throw error }
+        catch { startup = nil; proxyResolver = nil; headerResolver = nil; await Diagnostics.shared.record(.engineStartFailed); throw error }
     }
     private static func bindProxy(_ resolver: IOSProxyResolver) throws {
         var error: NSError?
         guard YunxengineSetProxyResolver(resolver, &error) else { throw CloudError.message("原生引擎代理配置失败，请重启应用后重试。") }
+    }
+    private static func bindHeaderResolver(_ resolver: IOSHeaderResolver) throws {
+        var error: NSError?
+        guard YunxengineSetHeaderResolver(resolver, &error) else { throw CloudError.message("原生下载凭证服务配置失败，请重启应用。") }
     }
     private static func applyHTTPBandwidthLimit(_ kibPerSecond: Int) throws {
         guard (0...1_048_576).contains(kibPerSecond) else { throw CloudError.message("原生 HTTP 限速需为 0–1048576 KiB/s，0 表示不限。") }
@@ -119,6 +131,13 @@ actor NativeEngine {
             }
             return data
         }.value
+        if method == "DELETE" {
+            let parts = path.split(separator: "/")
+            if parts.count == 4, parts[0] == "api", parts[1] == "v1", parts[2] == "tasks",
+               let context = headerContextsByTask.removeValue(forKey: String(parts[3])) {
+                NativeRequestHeaders.shared.delete(context)
+            }
+        }
         if UserDefaults.standard.bool(forKey: DownloadNotifications.preferenceKey) {
             if method == "POST", path == "/api/v1/tasks", let id = (try? JSONDecoder().decode(EngineEnvelope<String>.self, from: data))?.data {
                 watchedCompletions.insert(id)
@@ -143,7 +162,7 @@ actor NativeEngine {
             var error: NSError?
             return YunxengineStopForStorage(&error)
         }.value
-        self.startup = nil; proxyResolver = nil
+        self.startup = nil; proxyResolver = nil; headerResolver = nil
         guard closed else { DownloadStorage.failClosed(); throw DownloadStorageError.unavailable }
     }
     func watchCurrentCompletions() async {
@@ -176,7 +195,15 @@ actor NativeEngine {
     func managementServerRunning() -> Bool { YunxengineServerRunning() }
     func tasks() async throws -> [EngineTask] {
         let data = try await invoke("GET", path: "/api/v1/tasks")
-        return try JSONDecoder().decode(EngineEnvelope<[EngineTask]>.self, from: data).data ?? []
+        let result = try JSONDecoder().decode(EngineEnvelope<[EngineTask]>.self, from: data).data ?? []
+        for task in result {
+            guard let raw = task.meta?.req?.labels?[NativeRequestHeaders.label], let context = UUID(uuidString: raw) else { continue }
+            if task.status == "done" {
+                NativeRequestHeaders.shared.delete(context)
+                headerContextsByTask.removeValue(forKey: task.id)
+            } else { headerContextsByTask[task.id] = context }
+        }
+        return result
     }
     func create(_ url: String, trackers: [String]) async throws {
         let folder = downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -186,10 +213,26 @@ actor NativeEngine {
     }
     @discardableResult
     func createHTTPS(_ request: NativeHTTPSRequest) async throws -> String {
+        try await ensureStarted()
         let folder = downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let data = try await invoke("POST", path: "/api/v1/tasks", body: request.body(folder: folder))
-        guard let id = try JSONDecoder().decode(EngineEnvelope<String>.self, from: data).data else { throw CloudError.message("引擎未返回任务 ID。") }
-        return id
+        let privateRequest = request.headers.keys.contains { ["cookie", "authorization"].contains($0.lowercased()) }
+        let context = privateRequest ? UUID() : nil
+        if let context { try NativeRequestHeaders.shared.save(request.headers, original: request.url, id: context) }
+        do {
+            let data = try await invoke("POST", path: "/api/v1/tasks", body: request.body(folder: folder, headerContext: context))
+            guard let id = try JSONDecoder().decode(EngineEnvelope<String>.self, from: data).data else { throw CloudError.message("引擎未返回任务 ID。") }
+            if let context { headerContextsByTask[id] = context }
+            return id
+        } catch {
+            if let context { NativeRequestHeaders.shared.delete(context) }
+            throw error
+        }
+    }
+    @discardableResult
+    func createAuthenticatedHTTPS(_ plan: CloudDownload, connections: Int) async throws -> String {
+        let request = try NativeHTTPSRequest(text: plan.url.absoluteString, filename: plan.filename,
+                                            connections: connections, headers: plan.headers, accountHeaders: true)
+        return try await createHTTPS(request)
     }
     func createHLS(_ asset: MediaAsset) async throws {
         guard asset.isHLS, asset.url.scheme == "https", asset.url.pathExtension.lowercased() == "m3u8",

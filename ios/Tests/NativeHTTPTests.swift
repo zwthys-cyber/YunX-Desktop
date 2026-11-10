@@ -11,13 +11,16 @@ final class NativeHTTPFixture {
     private let lock = NSLock()
     private var stopped = false
     private var failuresRemaining: Int
+    private let requiredHeader: String?
+    private let redirectTo: URL?
     private var starts: [Int] = []
     private var clients = Set<Int32>()
     private let port: UInt16
-    init(data: Data, failures: Int = 0, observer: (@Sendable (String) -> Void)? = nil) throws {
+    init(data: Data, failures: Int = 0, requiredHeader: String? = nil, redirectTo: URL? = nil, observer: (@Sendable (String) -> Void)? = nil) throws {
         self.data = data
         self.failuresRemaining = failures
         self.observer = observer
+        self.requiredHeader = requiredHeader; self.redirectTo = redirectTo
         let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard socket >= 0 else { throw CloudError.message("Fixture socket failed") }
         var address = sockaddr_in()
@@ -69,6 +72,15 @@ final class NativeHTTPFixture {
         }
         let text = String(decoding: input, as: UTF8.self)
         observer?(text)
+        if let requiredHeader, !text.contains(requiredHeader) {
+            _ = write(Data("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8), socket: socket)
+            return
+        }
+        if let redirectTo {
+            let head = "HTTP/1.1 302 Found\r\nLocation: \(redirectTo.absoluteString)\r\nSet-Cookie: fixture-session=not-for-other-origins; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            _ = write(Data(head.utf8), socket: socket)
+            return
+        }
         lock.lock()
         let fail = failuresRemaining > 0
         if fail { failuresRemaining -= 1 }

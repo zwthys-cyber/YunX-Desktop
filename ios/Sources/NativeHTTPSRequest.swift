@@ -8,7 +8,7 @@ struct NativeHTTPSRequest {
     let checksum: String?
     let headers: [String: String]
     let labels: [String: String]
-    init(text: String, filename: String = "", connections: Int = 4, checksum: String = "", headers: [String: String] = [:], labels: [String: String] = [:]) throws {
+    init(text: String, filename: String = "", connections: Int = 4, checksum: String = "", headers: [String: String] = [:], labels: [String: String] = [:], accountHeaders: Bool = false) throws {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme?.lowercased() == "https",
               url.host != nil, url.user == nil, url.password == nil, url.pathExtension.lowercased() != "m3u8" else {
             throw CloudError.message("请输入不含账号密码的 HTTPS 文件直链；HLS 请从媒体解析加入。")
@@ -18,7 +18,8 @@ struct NativeHTTPSRequest {
         guard digest.isEmpty || digest.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
             throw CloudError.message("预期 SHA-256 需为 64 位十六进制。")
         }
-        guard !headers.keys.contains(where: { !["referer", "user-agent", "accept"].contains($0.lowercased()) }) else {
+        if accountHeaders { try NativeRequestHeaders.validate(headers) }
+        else if headers.keys.contains(where: { !["referer", "user-agent", "accept"].contains($0.lowercased()) }) {
             throw CloudError.message("此原生直链入口不接收账号请求头。")
         }
         self.url = url
@@ -26,11 +27,15 @@ struct NativeHTTPSRequest {
         self.filename = name.isEmpty ? nil : FileNamePolicy.name(name)
         self.connections = connections; self.checksum = digest.isEmpty ? nil : digest; self.headers = headers; self.labels = labels
     }
-    func body(folder: URL) throws -> Data {
+    func body(folder: URL, headerContext: UUID? = nil) throws -> Data {
         var extra: [String: Any] = ["connections": connections, "autoTorrent": false, "autoExtract": false]
         if let checksum { extra["checksum"] = ["algorithm": "sha256", "expected": checksum] }
         var options: [String: Any] = ["path": folder.path, "extra": extra, "skipAutoCategorize": true]
         if let filename { options["name"] = filename }
-        return try JSONSerialization.data(withJSONObject: ["req": ["url": url.absoluteString, "labels": labels, "extra": ["method": "GET", "header": headers]], "opts": options])
+        var requestLabels = labels
+        requestLabels.removeValue(forKey: NativeRequestHeaders.label)
+        if let headerContext { requestLabels[NativeRequestHeaders.label] = headerContext.uuidString }
+        return try JSONSerialization.data(withJSONObject: ["req": ["url": url.absoluteString, "labels": requestLabels,
+                                                                  "extra": ["method": "GET", "header": headerContext == nil ? headers : [:]]], "opts": options])
     }
 }
