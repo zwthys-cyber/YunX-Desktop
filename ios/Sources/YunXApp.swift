@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import SwiftUI
+import QuickLook
 
 @main
 @MainActor
@@ -56,7 +57,19 @@ struct DownloadScreen: View {
     @EnvironmentObject var assemblies: MediaAssemblyStore
     @ObservedObject var store: DownloadStore
     @State private var input = ""
+    @State private var filename = ""
+    @State private var previewFile: URL?
     @State private var inputError: String?
+    private var suggestedFilename: String {
+        let name = URL(string: input.trimmingCharacters(in: .whitespacesAndNewlines))?.lastPathComponent.removingPercentEncoding ?? ""
+        return name.isEmpty ? "保存文件名（自动识别）" : name
+    }
+    private var displayedItems: [DownloadItem] {
+        store.items.enumerated().sorted {
+            if ($0.element.state == .failed) != ($1.element.state == .failed) { return $0.element.state == .failed }
+            return $0.offset < $1.offset
+        }.map(\.element)
+    }
 
     var body: some View {
         NavigationStack {
@@ -66,6 +79,8 @@ struct DownloadScreen: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
+                    TextField(suggestedFilename, text: $filename)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("下载") {
                         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard let url = URL(string: value),
@@ -75,7 +90,8 @@ struct DownloadScreen: View {
                             return
                         }
                         inputError = nil
-                        if store.add(url) { input = "" }
+                        let name = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if store.add(url, filename: name.isEmpty ? nil : name) { input = ""; filename = "" }
                         else { inputError = store.storageError }
                     }
                     if let inputError { Text(inputError).foregroundStyle(.red) }
@@ -102,7 +118,7 @@ struct DownloadScreen: View {
                     if store.items.isEmpty {
                         ContentUnavailableView("暂无下载", systemImage: "arrow.down.circle")
                     }
-                    ForEach(store.items) { item in
+                    ForEach(displayedItems) { item in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(item.filename).lineLimit(2)
                             HStack {
@@ -125,6 +141,7 @@ struct DownloadScreen: View {
                                     Button("继续") { store.start(item.id) }.buttonStyle(.bordered)
                                 }
                                 if let file = store.fileURL(item) {
+                                    Button("打开") { previewFile = file }.buttonStyle(.bordered)
                                     Button(store.hashing.contains(item.id) ? "计算中…" : "SHA-256") { store.calculateChecksum(item.id) }
                                         .buttonStyle(.bordered).disabled(store.hashing.contains(item.id))
                                     ShareLink(item: file) { Label("导出", systemImage: "square.and.arrow.up") }
@@ -136,11 +153,15 @@ struct DownloadScreen: View {
                                     .disabled(item.state == .pausing)
                             }
                         }.padding(.vertical, 4)
+                            .contextMenu {
+                                Button("复制直链") { UIPasteboard.general.string = (item.originFallback ?? item.url).absoluteString }
+                            }
                     }
                 }
             }.navigationTitle("云析")
         }
-        .onReceive(navigation.$downloadInput.compactMap { $0 }) { value in input = value; inputError = nil; navigation.downloadInput = nil }
+        .quickLookPreview($previewFile)
+        .onReceive(navigation.$downloadInput.compactMap { $0 }) { value in input = value; filename = ""; inputError = nil; navigation.downloadInput = nil }
     }
 }
 
