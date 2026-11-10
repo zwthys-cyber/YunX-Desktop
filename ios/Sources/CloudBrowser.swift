@@ -70,7 +70,7 @@ struct CloudHomeScreen: View {
                 }
                 if let error { Section("提示") { Text(error).foregroundStyle(.red) } }
                 Section {
-                    Text("当前接入夸克、UC、123、光鸭和蓝奏优享的目录、取链与长按文件管理。支持递归批量下载（最多 500 文件/100 目录）；其他平台仍在移植。")
+                    Text("当前接入夸克、UC、123、光鸭、蓝奏优享和迅雷。支持目录及长按文件管理、个人盘递归批量下载（最多 500 文件/100 目录）；迅雷分享先转存，再从个人盘下载。其他平台仍在移植。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }.navigationTitle("网盘")
@@ -231,7 +231,10 @@ struct CloudBrowserScreen: View {
                     if model.folders.count > 1 {
                         Button("返回上级") { action = Task { await model.back() } }.disabled(model.busy)
                     }
-                    Button("下载此目录（含子目录）") { confirmBatch = true }.disabled(model.busy)
+                    if route.provider == .xunlei, route.share != nil {
+                        Text("迅雷分享需选择已登录账号转存，再从个人网盘下载。转存前可选择目标目录。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else { Button("下载此目录（含子目录）") { confirmBatch = true }.disabled(model.busy) }
                     if route.provider.supportsManagement, route.share == nil, route.account != nil {
                         Button("新建文件夹") { renameFile = nil; name = ""; showName = true }.disabled(model.busy)
                     }
@@ -262,8 +265,12 @@ struct CloudBrowserScreen: View {
                                 Button("进入") { action = Task { await model.open(file) } }
                                     .buttonStyle(.bordered).disabled(model.busy)
                             } else {
-                                Button("下载") { action = Task { await model.download(file) } }
-                                    .buttonStyle(.bordered).disabled(model.busy)
+                                if route.provider == .xunlei, route.share != nil {
+                                    Button("转存") { destinationFile = file }.buttonStyle(.bordered).disabled(model.busy || route.account == nil)
+                                } else {
+                                    Button("下载") { action = Task { await model.download(file) } }
+                                        .buttonStyle(.bordered).disabled(model.busy)
+                                }
                             }
                         }
                         .contextMenu {

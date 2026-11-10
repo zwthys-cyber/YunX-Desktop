@@ -146,6 +146,7 @@ struct AccountScreen: View {
     @State private var pan123Login = false
     @State private var guangyaLogin = false
     @State private var ilanzouLogin = false
+    @State private var xunleiLogin = false
     @State private var editingCredential: SavedCredential?
     @State private var verifyingID: UUID?
     @State private var verification: String?
@@ -161,6 +162,7 @@ struct AccountScreen: View {
                     Button("123 账号密码登录") { pan123Login = true }
                     Button("光鸭账号密码登录") { guangyaLogin = true }
                     Button("蓝奏优享账号密码登录") { ilanzouLogin = true }
+                    Button("迅雷官网登录") { xunleiLogin = true }
                     ForEach(CloudProvider.allCases.filter(\.supportsWebCookieLogin)) { provider in
                         Button("登录" + provider.rawValue) { loginProvider = provider }
                     }
@@ -182,7 +184,7 @@ struct AccountScreen: View {
                         vault.add(platform: platform, remark: remark, secret: secret)
                         if vault.message == nil { secret = ""; remark = "" }
                     }.disabled(secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Text("夸克、UC、123、光鸭、蓝奏优享和媒体平台已接入解析；GitHub Token 用于仓库 API。迅雷、百度、139、115 和蓝奏云暂时仅存储。")
+                    Text("夸克、UC、123、光鸭、蓝奏优享、迅雷和媒体平台已接入解析；GitHub Token 用于仓库 API。百度、139、115 和蓝奏云暂时仅存储。迅雷凭据还需要对应设备标识，请使用官网登录或完整备份。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let message = vault.message {
@@ -214,6 +216,7 @@ struct AccountScreen: View {
                 .sheet(isPresented: $pan123Login) { Pan123LoginScreen(vault: vault) }
                 .sheet(isPresented: $guangyaLogin) { GuangYaLoginScreen(vault: vault) }
                 .sheet(isPresented: $ilanzouLogin) { ILanzouLoginScreen(vault: vault) }
+                .sheet(isPresented: $xunleiLogin) { XunleiLoginScreen(vault: vault) }
                 .sheet(item: $loginProvider) { provider in
                     CloudWebLogin(provider: provider, vault: vault)
                 }

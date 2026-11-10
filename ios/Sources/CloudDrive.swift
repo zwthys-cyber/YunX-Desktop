@@ -8,17 +8,18 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     case pan123 = "123"
     case guangya = "光鸭"
     case ilanzou = "蓝奏优享"
+    case xunlei = "迅雷"
     var supportsWebCookieLogin: Bool { self == .quark || self == .uc }
-    var supportsManagement: Bool { [CloudProvider.quark, .uc, .pan123, .guangya, .ilanzou].contains(self) }
+    var supportsManagement: Bool { [CloudProvider.quark, .uc, .pan123, .guangya, .ilanzou, .xunlei].contains(self) }
     var id: String { rawValue }
     var apiHost: String {
-        switch self { case .quark: return "drive-pc.quark.cn"; case .uc: return "pc-api.uc.cn"; case .pan123: return "yun.123pan.cn"; case .guangya: return "api.guangyapan.com"; case .ilanzou: return "apis.ilanzou.com" }
+        switch self { case .quark: return "drive-pc.quark.cn"; case .uc: return "pc-api.uc.cn"; case .pan123: return "yun.123pan.cn"; case .guangya: return "api.guangyapan.com"; case .ilanzou: return "apis.ilanzou.com"; case .xunlei: return "api-pan.xunlei.com" }
     }
     var webHost: String {
-        switch self { case .quark: return "pan.quark.cn"; case .uc: return "drive.uc.cn"; case .pan123: return "www.123pan.com"; case .guangya: return "www.guangyapan.com"; case .ilanzou: return "www.ilanzou.com" }
+        switch self { case .quark: return "pan.quark.cn"; case .uc: return "drive.uc.cn"; case .pan123: return "www.123pan.com"; case .guangya: return "www.guangyapan.com"; case .ilanzou: return "www.ilanzou.com"; case .xunlei: return "pan.xunlei.com" }
     }
     var cookieDomain: String {
-        switch self { case .quark: return "quark.cn"; case .uc: return "uc.cn"; case .pan123: return "123pan.cn"; case .guangya: return "guangyapan.com"; case .ilanzou: return "ilanzou.com" }
+        switch self { case .quark: return "quark.cn"; case .uc: return "uc.cn"; case .pan123: return "123pan.cn"; case .guangya: return "guangyapan.com"; case .ilanzou: return "ilanzou.com"; case .xunlei: return "xunlei.com" }
     }
     func acceptsShareHost(_ host: String) -> Bool {
         if self == .ilanzou { return ["ilanzou.com", "www.ilanzou.com", "ilanzou.net", "www.ilanzou.net", "ilanzou.org", "www.ilanzou.org", "ilanzou.cn", "www.ilanzou.cn"].contains(host) }
@@ -29,6 +30,7 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     var origin: String { "https://" + webHost }
     var loginURL: URL { URL(string: origin + "/")! }
     var userAgent: String {
+        if self == .xunlei { return XunleiProtocol.webAgent }
         if self == .quark {
             return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.12-a038f7b798 Safari/537.36 Channel/pckk_other_ch"
         }
@@ -50,10 +52,11 @@ struct CloudShare: Equatable {
         let range = NSRange(text.startIndex..., in: text)
         for match in detector.matches(in: text, range: range) {
             guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  url.user == nil, url.password == nil,
                   let provider = CloudProvider.allCases.first(where: { $0.acceptsShareHost(url.host?.lowercased() ?? "") }) else { continue }
             let parts = url.path.split(separator: "/")
             guard parts.count >= 2, parts[0] == "s",
-                  parts[1].range(of: [CloudProvider.pan123, .guangya, .ilanzou].contains(provider) ? "^[A-Za-z0-9_-]+$" : "^[A-Za-z0-9]+$", options: .regularExpression) != nil else { continue }
+                  parts[1].range(of: [CloudProvider.pan123, .guangya, .ilanzou, .xunlei].contains(provider) ? "^[A-Za-z0-9_-]+$" : "^[A-Za-z0-9]+$", options: .regularExpression) != nil else { continue }
             let queryCode = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name.lowercased() == "pwd" || (provider == .guangya && $0.name.lowercased() == "code") })?.value
             let pattern = #"(?:提取码|访问码|密码)\s*[：:]?\s*([A-Za-z0-9]{4,8})"#
@@ -64,7 +67,7 @@ struct CloudShare: Equatable {
             return CloudShare(provider: provider, shareID: String(parts[1]),
                               passcode: manual.isEmpty ? (queryCode ?? textCode ?? "") : manual)
         }
-        throw CloudError.message("目前支持夸克、UC、123、光鸭和蓝奏优享分享链接，请粘贴完整的 https://…/s/… 链接。")
+        throw CloudError.message("目前支持夸克、UC、123、光鸭、蓝奏优享和迅雷分享链接，请粘贴完整的 https://…/s/… 链接。")
     }
 }
 
@@ -121,6 +124,7 @@ final class CloudClient {
     private var pan123: Pan123Client?
     private var guangya: GuangYaClient?
     private var ilanzou: ILanzouClient?
+    private var xunlei: XunleiClient?
     private let session: URLSession
     private let cookieChanged: ((String) -> Void)?
     private var tokens: [CloudShareKey: String] = [:]
@@ -143,11 +147,13 @@ final class CloudClient {
         if provider == .pan123 { pan123 = Pan123Client(token: cookie, session: self.session) }
         if provider == .guangya { guangya = GuangYaClient(token: cookie, fields: fields, session: self.session, changed: credentialChanged) }
         if provider == .ilanzou { ilanzou = ILanzouClient(token: cookie, fields: fields, session: self.session) }
+        if provider == .xunlei { xunlei = XunleiClient(token: cookie, fields: fields, session: self.session, changed: credentialChanged) }
     }
 
     deinit { session.invalidateAndCancel() }
 
     func validateAccount() async throws -> String {
+        if let xunlei { return try await xunlei.validate() }
         if let ilanzou { return try await ilanzou.validate() }
         if let guangya { return try await guangya.validate() }
         if let pan123 { return try await pan123.validate() }
@@ -168,6 +174,7 @@ final class CloudClient {
     }
 
     func mutate(_ operation: CloudMutation) async throws {
+        if let xunlei { try await xunlei.mutate(operation); return }
         if let pan123 { try await pan123.mutate(operation); return }
         if let ilanzou { try await ilanzou.mutate(operation); return }
         if let guangya { try await guangya.mutate(operation); return }
@@ -228,6 +235,7 @@ final class CloudClient {
     }
 
     func list(share: CloudShare?, parentID: String = "0", page: Int = 1) async throws -> [CloudFile] {
+        if let xunlei { return try await xunlei.list(share: share, parent: parentID, page: page) }
         if let ilanzou { return try await ilanzou.list(share: share, parent: parentID, page: page) }
         if let guangya { return try await guangya.list(share: share, parent: parentID, page: page) }
         if let pan123 { return try await pan123.list(share: share, parent: parentID, page: page) }
@@ -277,7 +285,8 @@ final class CloudClient {
     func listPage(share: CloudShare?, parentID: String = "0", page: Int = 1) async throws -> CloudPage {
         let files = try await list(share: share, parentID: parentID, page: page)
         let more: Bool
-        if let pan123 { more = pan123.hasMore(share: share, parent: parentID, page: page) }
+        if let xunlei { more = xunlei.hasMore(share: share, parent: parentID, page: page) }
+        else if let pan123 { more = pan123.hasMore(share: share, parent: parentID, page: page) }
         else if let guangya { more = guangya.hasMore(share: share, parent: parentID, page: page) }
         else if let ilanzou { more = ilanzou.hasMore(share: share, parent: parentID, page: page, count: files.count) }
         else { more = files.count >= 50 }
@@ -286,6 +295,7 @@ final class CloudClient {
     }
 
     func download(file: CloudFile, share: CloudShare?) async throws -> CloudDownload {
+        if let xunlei { return try await xunlei.download(file: file, share: share) }
         if let ilanzou { return try await ilanzou.download(file: file, share: share) }
         if let guangya { return try await guangya.download(file: file, share: share) }
         if let pan123 { return try await pan123.download(file: file, share: share) }
