@@ -47,6 +47,7 @@ cp Engine/runtime_http_options.go "$engine_temp/gopeed/pkg/base/yunx_runtime_htt
 cp Engine/runtime_http_options_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_http_options_test.go"
 cp Engine/http_options.go "$engine_temp/gopeed/internal/protocol/http/yunx_http_options.go"
 cp Engine/http_transport_test.go "$engine_temp/gopeed/internal/httpclient/yunx_http_transport_test.go"
+cp Engine/http_browser_http1.go "$engine_temp/gopeed/internal/httpclient/yunx_browser_http1.go"
 cp Engine/runtime_headers.go "$engine_temp/gopeed/pkg/base/yunx_runtime_headers.go"
 cp Engine/runtime_headers_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_headers_test.go"
 cp Engine/runtime_headers_http_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_runtime_headers_test.go"

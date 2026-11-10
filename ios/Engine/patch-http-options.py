@@ -41,5 +41,5 @@ source = source.replace(old, """    var nextProto map[string]func(string, *tls.C
 old = "\treturn &defaultHeaderTransport{"
 if source.count(old) != 1:
     raise SystemExit("Pinned browser transport construction changed")
-source = source.replace(old, "    if options.YunxDisableHTTP2 { client.EnableForceHTTP1() }\n" + old)
+source = source.replace(old, "    if options.YunxDisableHTTP2 { yunxBrowserHTTP1(client, browser) }\n" + old)
 path.write_text(source)
