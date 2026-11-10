@@ -43,6 +43,13 @@ jobs:
           fi
           xcodegen --version
 
+      - name: Run offline protocol tests on iOS Simulator
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ios/build
+          bash ios/test-ios.sh 2>&1 | tee ios/build/tests.log
+
       - name: Compile and package IPA
         shell: bash
         run: |
@@ -67,7 +74,9 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: YunX-iOS-build-log
-          path: ios/build/build.log
+          path: |
+            ios/build/*.log
+            ios/build/TestResults.xcresult
           if-no-files-found: ignore
           retention-days: 14
 
@@ -81,6 +90,6 @@ jobs:
             echo "Download: $ARTIFACT_URL"
             echo
             echo 'arm64 device build; iOS 17.0 minimum; ad-hoc signed for TrollStore installation.'
-            echo 'Development port only: cloud-drive/video/P2P features remain unimplemented.'
+            echo 'Development port: Quark/UC share and personal-folder browsing, web login, and single-file downloads. Other providers, video parsing and P2P remain incomplete.'
             echo 'Compilation/package checks do not verify installation or runtime on a real device.'
           } >> "$GITHUB_STEP_SUMMARY"

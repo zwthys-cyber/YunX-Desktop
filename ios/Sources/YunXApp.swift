@@ -9,6 +9,8 @@ struct YunXApp: App {
     var body: some Scene {
         WindowGroup {
             TabView {
+                CloudHomeScreen(vault: vault, downloads: downloads)
+                    .tabItem { Label("网盘", systemImage: "externaldrive") }
                 DownloadScreen(store: downloads)
                     .tabItem { Label("下载", systemImage: "arrow.down.circle") }
                 AccountScreen(vault: vault)
@@ -46,7 +48,7 @@ struct DownloadScreen: View {
                         input = ""
                     }
                     if let inputError { Text(inputError).foregroundStyle(.red) }
-                    Text("网盘分享页和视频作品页尚未接入，不能作为文件直链下载。当前仅支持前台下载。")
+                    Text("夸克和 UC 分享链接请到「网盘」解析；此处只接受文件直链。当前仅支持前台下载。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error = store.storageError {
@@ -96,6 +98,9 @@ struct AccountScreen: View {
     @State private var platform = "夸克"
     @State private var remark = ""
     @State private var secret = ""
+    @State private var loginProvider: CloudProvider?
+    @State private var verifyingID: UUID?
+    @State private var verification: String?
     private let platforms = [
         "夸克", "UC", "迅雷", "百度", "139", "123", "115", "光鸭",
         "蓝奏云", "蓝奏优享", "哔哩哔哩", "Pixiv", "GitHub"
@@ -104,6 +109,14 @@ struct AccountScreen: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("网页登录") {
+                    ForEach(CloudProvider.allCases) { provider in
+                        Button("登录" + provider.rawValue) { loginProvider = provider }
+                    }
+                }
+                if let verification {
+                    Section("账号验证") { Text(verification) }
+                }
                 Section("手动保存凭证") {
                     Picker("平台", selection: $platform) {
                         ForEach(platforms, id: \.self) { Text($0).tag($0) }
@@ -115,7 +128,7 @@ struct AccountScreen: View {
                         vault.add(platform: platform, remark: remark, secret: secret)
                         if vault.message == nil { secret = ""; remark = "" }
                     }.disabled(secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Text("目前仅提供凭证存储；尚未接入平台登录验证或解析请求。")
+                    Text("夸克和 UC 凭证已接入网盘浏览与取链；其他平台暂时仅存储。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let message = vault.message {
@@ -130,11 +143,29 @@ struct AccountScreen: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
+                            if let provider = CloudProvider(rawValue: account.platform) {
+                                Button(verifyingID == account.id ? "验证中" : "验证") {
+                                    verifyingID = account.id
+                                    verification = nil
+                                    Task { @MainActor in
+                                        defer { verifyingID = nil }
+                                        do {
+                                            let client = CloudClient(provider: provider, cookie: account.secret,
+                                                                     cookieChanged: { vault.updateSecret(account.id, secret: $0) })
+                                            let name = try await client.validateAccount()
+                                            verification = "\(provider.rawValue)账号有效：\(name)"
+                                        } catch { verification = "账号验证失败，请检查登录状态与网络。" }
+                                    }
+                                }.disabled(verifyingID != nil).buttonStyle(.bordered)
+                            }
                             Button("删除", role: .destructive) { vault.delete(account.id) }
                         }
                     }
                 }
             }.navigationTitle("账号")
+                .sheet(item: $loginProvider) { provider in
+                    CloudWebLogin(provider: provider, vault: vault)
+                }
         }
     }
 }
@@ -149,6 +180,8 @@ struct PortStatusScreen: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("已编写，等待真机验证") {
+                    Label("夸克 / UC 分享解析与个人目录", systemImage: "externaldrive")
+                    Label("网页登录、账号验证与 Cookie 刷新", systemImage: "person.crop.circle")
                     Label("HTTP(S) 直链前台下载", systemImage: "doc")
                     Label("暂停、断点数据保存、重试", systemImage: "pause.circle")
                     Label("任务记录与文件导出", systemImage: "square.and.arrow.up")
@@ -156,13 +189,13 @@ struct PortStatusScreen: View {
                 }
                 Section("尚未移植") {
                     ForEach([
-                        "全部网盘的登录、目录、取链与转存清理",
+                        "其他网盘适配、文件夹批量与转存管理",
                         "七个视频平台解析与高清分轨",
                         "GitHub 仓库浏览、镜像和测速",
                         "多线程分片、校验、限速与多源下载",
                         "HLS、DASH 合轨、Live Photo 与预览",
                         "BT、磁力、ed2k 与 Gopeed 引擎",
-                        "网页登录、备份、历史、收藏与诊断",
+                        "其他平台网页登录、备份、历史、收藏与诊断",
                         "分享扩展、浏览器集成与后台下载"
                     ], id: \.self) { Text($0) }
                 }

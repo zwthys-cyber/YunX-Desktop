@@ -46,6 +46,13 @@ final class CredentialVault: ObservableObject {
         persist(updated)
     }
 
+    func updateSecret(_ id: UUID, secret: String) {
+        guard let index = accounts.firstIndex(where: { $0.id == id }) else { return }
+        var updated = accounts
+        updated[index].secret = secret
+        persist(updated)
+    }
+
     func delete(_ id: UUID) {
         persist(accounts.filter { $0.id != id })
     }

@@ -24,6 +24,9 @@ struct DownloadItem: Codable, Identifiable {
     var received: Int64 = 0
     var expected: Int64 = 0
     var error: String?
+    var requiresHeaders: Bool?
+    var preserveFilename: Bool?
+    var requiredSize: Int64?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -65,26 +68,50 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }
 
-    func add(_ url: URL) {
+    @discardableResult
+    func add(_ url: URL, filename: String? = nil, headers: [String: String] = [:],
+             expectedSize: Int64? = nil) -> Bool {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
             storageError = "只接受 HTTP 或 HTTPS 文件直链"
-            return
+            return false
         }
-        let name = safeName(url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
-        let item = DownloadItem(id: UUID(), url: url, filename: name, state: .waiting)
+        let name = safeName(filename ?? url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
+        var item = DownloadItem(id: UUID(), url: url, filename: name, state: .waiting)
+        item.requiresHeaders = !headers.isEmpty
+        item.preserveFilename = filename != nil
+        item.requiredSize = expectedSize
+        if !headers.isEmpty {
+            do { try DownloadHeaders.save(headers, id: item.id) }
+            catch { storageError = error.localizedDescription; return false }
+        }
+        storageError = nil
         items.insert(item, at: 0)
         save()
         start(item.id)
+        return true
     }
 
     func start(_ id: UUID) {
         guard active[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               items[index].state != .completed, items[index].state != .pausing else { return }
+        var request = URLRequest(url: items[index].url)
+        if items[index].requiresHeaders == true {
+            do {
+                for (key, value) in try DownloadHeaders.load(id) {
+                    request.setValue(value, forHTTPHeaderField: key)
+                }
+            } catch {
+                items[index].state = .failed
+                items[index].error = "下载凭证不可用，请解锁设备或重新解析文件。"
+                save()
+                return
+            }
+        }
         let task: URLSessionDownloadTask
         if let resume = try? Data(contentsOf: resumeURL(id)) {
             task = session.downloadTask(withResumeData: resume)
         } else {
-            task = session.downloadTask(with: items[index].url)
+            task = session.downloadTask(with: request)
         }
         task.taskDescription = id.uuidString
         active[id] = task
@@ -115,6 +142,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         active.removeValue(forKey: id)?.cancel()
         items.removeAll { $0.id == id }
         try? manager.removeItem(at: resumeURL(id))
+        DownloadHeaders.delete(id)
         // 下载完成的文件保留，删除记录不会隐式删除用户文件。
         save()
     }
@@ -172,7 +200,14 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             return
         }
         do {
-            let proposed = safeName(response.suggestedFilename ?? items[index].filename)
+            if let expected = items[index].requiredSize, expected > 0 {
+                let actual = try location.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard Int64(actual) == expected else {
+                    throw CloudError.message("返回文件大小与平台记录不一致，已拒绝保存。")
+                }
+            }
+            let proposed = items[index].preserveFilename == true ? items[index].filename :
+                safeName(response.suggestedFilename ?? items[index].filename)
             let original = URL(fileURLWithPath: proposed)
             let ext = original.pathExtension
             let stem = original.deletingPathExtension().lastPathComponent
@@ -188,6 +223,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             items[index].state = .completed
             items[index].received = (try destination.resourceValues(forKeys: [.fileSizeKey])).fileSize.map(Int64.init) ?? items[index].received
             try? manager.removeItem(at: resumeURL(id))
+            DownloadHeaders.delete(id)
         } catch {
             items[index].state = .failed
             items[index].error = "无法保存文件：\(error.localizedDescription)"
@@ -196,11 +232,36 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let target = request.url, target.scheme?.lowercased() == "https" else {
+            completionHandler(nil)
+            return
+        }
+        var redirected = request
+        if let raw = task.taskDescription, let id = UUID(uuidString: raw),
+           let item = items.first(where: { $0.id == id }), item.requiresHeaders == true {
+            let headers = (try? DownloadHeaders.load(id)) ?? [:]
+            for key in ["Cookie", "Authorization", "Proxy-Authorization"] {
+                redirected.setValue(nil, forHTTPHeaderField: key)
+            }
+            for (key, value) in DownloadHeaders.redirectHeaders(headers, original: item.url, target: target) {
+                redirected.setValue(value, forHTTPHeaderField: key)
+            }
+        }
+        completionHandler(redirected)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         guard let value = task.taskDescription, let id = UUID(uuidString: value) else { return }
+        if let current = active[id], current.taskIdentifier != task.taskIdentifier { return }
         active.removeValue(forKey: id)
         guard !removed.contains(id), let index = items.firstIndex(where: { $0.id == id }) else { return }
         if items[index].state == .pausing { return }
+        if items[index].state == .paused, let cancellation = error as NSError?,
+           cancellation.domain == NSURLErrorDomain, cancellation.code == NSURLErrorCancelled { return }
         if let error = error as NSError? {
             writeResume(error.userInfo[NSURLSessionDownloadTaskResumeData] as? Data, id: id)
             items[index].state = .failed
