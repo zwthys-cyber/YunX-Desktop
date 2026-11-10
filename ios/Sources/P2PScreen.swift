@@ -76,6 +76,26 @@ final class P2PStore: ObservableObject {
             await refresh()
         } catch { message = "引擎操作失败，请刷新任务后重试。" }
     }
+    func refreshCloud(_ task: EngineTask, vault: CredentialVault) async {
+        guard !busy else { return }
+        busy = true; message = nil
+        defer { busy = false }
+        do {
+            guard let raw = task.meta?.req?.labels?[CloudTransferContext.label], let contextID = UUID(uuidString: raw),
+                  let escaped = task.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), !escaped.contains("/") else { throw CloudTransferContext.unavailable }
+            let context = try CloudTransferContexts.shared.load(contextID)
+            let current = try await NativeEngine.shared.tasks().first { $0.id == task.id }
+            guard let current, current.status != "done" else { throw CloudError.message("原任务已结束或被移除，请刷新列表。") }
+            if ["running", "wait", "ready"].contains(current.status) {
+                _ = try await NativeEngine.shared.invoke("PUT", path: "/api/v1/tasks/" + escaped + "/pause")
+            }
+            let (plan, updated) = try await context.refreshed(vault: vault)
+            try Task.checkCancellation()
+            _ = try await NativeEngine.shared.createCloudHTTPS(plan, context: updated)
+            message = "已重新取链并创建新任务；旧任务保持停止，旧片段不会混入新文件。可核对后删除旧记录。"
+            await refresh()
+        } catch { message = error is CloudError ? error.localizedDescription : "刷新直链失败，旧任务和文件已保留，请重新解析原目录。" }
+    }
     func importTorrent(_ url: URL, trackers: String) async {
         guard !busy else { return }
         busy = true; message = nil
@@ -98,6 +118,7 @@ final class P2PStore: ObservableObject {
 }
 
 struct P2PScreen: View {
+    @EnvironmentObject private var vault: CredentialVault
     @StateObject private var store = P2PStore()
     private var displayedTasks: [EngineTask] {
         store.tasks.enumerated().sorted {
@@ -116,6 +137,7 @@ struct P2PScreen: View {
     @AppStorage("engineHTTPConnections") private var httpConnections = 4
     @State private var importing = false
     @State private var deleting: EngineTask?
+    @State private var refreshingCloud: EngineTask?
     @AppStorage("engineTrackers") private var trackers = ""
     @AppStorage("engineDHT") private var dht = false
     @AppStorage("engineParallel") private var parallel = 3
@@ -189,6 +211,9 @@ struct P2PScreen: View {
                             } else if task.status != "done" {
                                 Button("继续") { Task { await store.action(task, operation: "continue") } }.buttonStyle(.bordered)
                             }
+                            if task.status != "done", task.meta?.req?.labels?[CloudTransferContext.label] != nil {
+                                Button("刷新直链") { refreshingCloud = task }.buttonStyle(.bordered)
+                            }
                             if task.status == "done" { NavigationLink("文件") { P2PFilesScreen(task: task) }.buttonStyle(.bordered) }
                             Spacer()
                             Button("删除记录", role: .destructive) { deleting = task }.buttonStyle(.bordered)
@@ -219,6 +244,15 @@ struct P2PScreen: View {
                     if let task = deleting { Task { await store.action(task, operation: "delete") } }
                     deleting = nil
                 }
+            }
+            .confirmationDialog("重新取链并从头下载？", isPresented: Binding(get: { refreshingCloud != nil }, set: { if !$0 { refreshingCloud = nil } }), titleVisibility: .visible) {
+                Button("重新取链并下载") {
+                    if let task = refreshingCloud { Task { await store.refreshCloud(task, vault: vault) } }
+                    refreshingCloud = nil
+                }
+                Button("取消", role: .cancel) { refreshingCloud = nil }
+            } message: {
+                Text("使用原任务账号重新读取目录和下载链接，不自动换账号或转存。旧任务会停止，新任务从头下载；蓝奏个人文件会重新生成公开分享链接。仍使用原连接数，超过 32 时可能触发平台限流或增加资源占用。")
             }
     }
 }

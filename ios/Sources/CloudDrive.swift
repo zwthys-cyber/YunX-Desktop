@@ -2,7 +2,7 @@
 // Protocol behavior ported from the repository's QuarkApi.kt / UCApi.kt.
 import Foundation
 
-enum CloudProvider: String, CaseIterable, Identifiable {
+enum CloudProvider: String, Codable, CaseIterable, Identifiable {
     case quark = "夸克"
     case uc = "UC"
     case pan123 = "123"
@@ -53,7 +53,7 @@ enum CloudProvider: String, CaseIterable, Identifiable {
     }
 }
 
-struct CloudShare: Equatable {
+struct CloudShare: Codable, Equatable {
     let provider: CloudProvider
     let shareID: String
     let passcode: String
@@ -128,7 +128,7 @@ struct CloudShare: Equatable {
     }
 }
 
-struct CloudFile: Identifiable, Equatable {
+struct CloudFile: Codable, Identifiable, Equatable {
     let id: String
     let name: String
     let size: Int64

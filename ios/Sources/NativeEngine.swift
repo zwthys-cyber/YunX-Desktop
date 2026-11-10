@@ -41,6 +41,7 @@ actor NativeEngine {
     private var proxyResolver: IOSProxyResolver?
     private var headerResolver: IOSHeaderResolver?
     private var headerContextsByTask: [String: UUID] = [:]
+    private var cloudContextsByTask: [String: UUID] = [:]
     private var activeOperations = 0
     private var watchedCompletions = Set<String>()
     private var completionMonitor: Task<Void, Never>?
@@ -145,9 +146,10 @@ actor NativeEngine {
         }.value
         if method == "DELETE" {
             let parts = path.split(separator: "/")
-            if parts.count == 4, parts[0] == "api", parts[1] == "v1", parts[2] == "tasks",
-               let context = headerContextsByTask.removeValue(forKey: String(parts[3])) {
-                NativeRequestHeaders.shared.delete(context)
+            if parts.count == 4, parts[0] == "api", parts[1] == "v1", parts[2] == "tasks" {
+                let taskID = String(parts[3])
+                if let context = headerContextsByTask.removeValue(forKey: taskID) { NativeRequestHeaders.shared.delete(context) }
+                if let context = cloudContextsByTask.removeValue(forKey: taskID) { CloudTransferContexts.shared.delete(context) }
             }
         }
         if UserDefaults.standard.bool(forKey: DownloadNotifications.preferenceKey) {
@@ -209,6 +211,7 @@ actor NativeEngine {
         let data = try await invoke("GET", path: "/api/v1/tasks")
         let result = try JSONDecoder().decode(EngineEnvelope<[EngineTask]>.self, from: data).data ?? []
         for task in result {
+            if let raw = task.meta?.req?.labels?[CloudTransferContext.label], let context = UUID(uuidString: raw) { cloudContextsByTask[task.id] = context }
             guard let raw = task.meta?.req?.labels?[NativeRequestHeaders.label], let context = UUID(uuidString: raw) else { continue }
             if task.status == "done" {
                 NativeRequestHeaders.shared.delete(context)
@@ -251,6 +254,19 @@ actor NativeEngine {
         let request = try NativeHTTPSRequest(text: plan.url.absoluteString, filename: plan.filename,
                                             connections: connections, headers: plan.headers, accountHeaders: true, expectedSize: plan.size)
         return try await createHTTPS(request)
+    }
+    @discardableResult
+    func createCloudHTTPS(_ plan: CloudDownload, context: CloudTransferContext) async throws -> String {
+        let id = UUID()
+        try CloudTransferContexts.shared.save(context, id: id)
+        do {
+            let request = try NativeHTTPSRequest(text: plan.url.absoluteString, filename: context.filename,
+                connections: context.connections, headers: plan.headers, labels: [CloudTransferContext.label: id.uuidString],
+                accountHeaders: true, expectedSize: plan.size)
+            let task = try await createHTTPS(request)
+            cloudContextsByTask[task] = id
+            return task
+        } catch { CloudTransferContexts.shared.delete(id); throw error }
     }
     func createHLS(_ asset: MediaAsset) async throws {
         guard asset.isHLS, asset.url.scheme == "https", asset.url.pathExtension.lowercased() == "m3u8",

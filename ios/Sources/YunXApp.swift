@@ -41,6 +41,7 @@ struct YunXApp: App {
                     .tabItem { Label("GitHub", systemImage: "shippingbox") }.tag(4)
             }
             .environmentObject(library)
+            .environmentObject(vault)
             .environmentObject(assemblies)
             .task { await Diagnostics.shared.record(.appOpened); inbox.refresh(); await updates.check(automatic: true) }
             .sheet(item: $updates.prompt) { _ in NavigationStack { IOSUpdatesScreen(store: updates, modal: true) } }

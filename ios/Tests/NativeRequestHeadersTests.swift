@@ -81,13 +81,19 @@ final class NativeHeadersRuntimeTests: XCTestCase {
             defer { origin?.stop() }
             let context = UUID()
             defer { NativeRequestHeaders.shared.delete(context) }
+            let cloudContext = UUID(), passcode = "cloud-passcode-" + UUID().uuidString
+            defer { CloudTransferContexts.shared.delete(cloudContext) }
             let folder = NativeEngine.shared.downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
             defer { try? FileManager.default.removeItem(at: folder) }
             var taskID: String?
             do {
                 try await NativeEngine.shared.ensureStarted()
                 try NativeRequestHeaders.shared.save(["Cookie": cookie], original: url, id: context)
-                let body: [String: Any] = ["req": ["url": url.absoluteString, "labels": [NativeRequestHeaders.label: context.uuidString]],
+                try CloudTransferContexts.shared.save(CloudTransferContext(provider: .quark, accountID: nil,
+                    share: CloudShare(provider: .quark, shareID: "fixture", passcode: passcode),
+                    file: CloudFile(id: "fixture", name: "private.bin", size: Int64(content.count), isDirectory: false, parentID: "0", token: "local-file-token"),
+                    filename: "private.bin", connections: 2), id: cloudContext)
+                let body: [String: Any] = ["req": ["url": url.absoluteString, "labels": [NativeRequestHeaders.label: context.uuidString, CloudTransferContext.label: cloudContext.uuidString]],
                                           "opts": ["path": folder.path, "name": "private.bin", "skipAutoCategorize": true]]
                 let created = try await NativeEngine.shared.invoke("POST", path: "/api/v1/tasks", body: JSONSerialization.data(withJSONObject: body))
                 let id = try XCTUnwrap(JSONDecoder().decode(EngineEnvelope<String>.self, from: created).data); taskID = id
@@ -105,6 +111,7 @@ final class NativeHeadersRuntimeTests: XCTestCase {
                 XCTAssertFalse(observation.leaked)
                 let snapshot = try await NativeEngine.shared.invoke("GET", path: "/api/v1/tasks/" + id)
                 XCTAssertFalse(String(decoding: snapshot, as: UTF8.self).contains(cookie))
+                XCTAssertFalse(String(decoding: snapshot, as: UTF8.self).contains(passcode))
                 XCTAssertThrowsError(try NativeRequestHeaders.shared.headers(id: context, original: url.absoluteString, target: url))
                 try await NativeEngine.shared.quiesceForStorage()
                 let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX/Engine")
@@ -112,8 +119,10 @@ final class NativeHeadersRuntimeTests: XCTestCase {
                 for case let file as URL in files where (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
                     let bytes = try Data(contentsOf: file, options: .mappedIfSafe)
                     XCTAssertNil(bytes.range(of: Data(cookie.utf8)), "Native engine persisted credential bytes")
+                    XCTAssertNil(bytes.range(of: Data(passcode.utf8)), "Native engine persisted share passcode bytes")
                 }
                 _ = try await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/\(id)", query: "force=true")
+                XCTAssertThrowsError(try CloudTransferContexts.shared.load(cloudContext))
             } catch {
                 if let taskID { _ = try? await NativeEngine.shared.invoke("DELETE", path: "/api/v1/tasks/\(taskID)", query: "force=true") }
                 throw error

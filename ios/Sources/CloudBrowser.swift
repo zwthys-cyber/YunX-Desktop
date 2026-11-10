@@ -142,9 +142,11 @@ final class CloudBrowserModel: ObservableObject {
     private let share: CloudShare?
     private let downloads: DownloadStore
     private let accountAvailable: () -> Bool
+    private let selectedAccountID: UUID?
 
     init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore) {
         share = route.share
+        selectedAccountID = route.account?.id
         self.downloads = downloads
         let current = route.account.flatMap { saved in vault.accounts.first { $0.id == saved.id && $0.platform == route.provider.rawValue } }
         accountAvailable = { [weak vault] in
@@ -212,11 +214,13 @@ final class CloudBrowserModel: ObservableObject {
     private func checkDownloadAccount() throws {
         guard accountAvailable() else { throw CloudError.message("所选账号已移除，请关闭目录并重新选择账号。") }
     }
-    private func enqueue(_ result: CloudDownload, filename: String? = nil, nativeConnections: Int?) async throws -> Bool {
+    private func enqueue(_ result: CloudDownload, file: CloudFile, filename: String? = nil, nativeConnections: Int?) async throws -> Bool {
         try checkDownloadAccount()
         if let nativeConnections {
             let plan = CloudDownload(url: result.url, filename: filename ?? result.filename, size: result.size, headers: result.headers)
-            _ = try await NativeEngine.shared.createAuthenticatedHTTPS(plan, connections: nativeConnections)
+            let context = CloudTransferContext(provider: client.provider, accountID: selectedAccountID, share: share,
+                file: file, filename: FileNamePolicy.name(plan.filename), connections: nativeConnections)
+            _ = try await NativeEngine.shared.createCloudHTTPS(plan, context: context)
             return true
         }
         return downloads.add(result.url, filename: filename ?? result.filename, headers: result.headers, expectedSize: result.size)
@@ -241,7 +245,7 @@ final class CloudBrowserModel: ObservableObject {
                     try Task.checkCancellation()
                     // Keep the download store's flat layout while retaining the folder names in the filename.
                     let name = (item.relativeFolders + [result.filename]).joined(separator: "_")
-                    if try await enqueue(result, filename: name, nativeConnections: nativeConnections) {
+                    if try await enqueue(result, file: item.file, filename: name, nativeConnections: nativeConnections) {
                         added += 1
                     } else { failed += 1 }
                 } catch is CancellationError { throw CancellationError() }
@@ -264,7 +268,7 @@ final class CloudBrowserModel: ObservableObject {
             try checkDownloadAccount()
             let result = try await client.download(file: file, share: share)
             try Task.checkCancellation()
-            if try await enqueue(result, nativeConnections: nativeConnections) {
+            if try await enqueue(result, file: file, nativeConnections: nativeConnections) {
                 message = nativeConnections == nil ? "已加入下载：\(file.name)，请到「下载」查看。" : "已加入原生下载：\(file.name)，请到「下载 → 原生引擎任务」查看。"
             } else { failure = downloads.storageError ?? "创建下载任务失败。" }
         } catch is CancellationError { }
