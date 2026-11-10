@@ -3,7 +3,7 @@
 from pathlib import Path
 import sys
 
-path = Path(sys.argv[1]) / "internal/fetcher/http/fetcher.go"
+path = Path(sys.argv[1]) / "internal/protocol/http/fetcher.go"
 source = path.read_text()
 start = "func (f *Fetcher) stopPrefetchAndCopyData() int64 {"
 end = "// cleanupPrefetchFile closes and removes the prefetch temporary file"

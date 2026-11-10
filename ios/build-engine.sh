@@ -43,7 +43,7 @@ cp Engine/runtime_scheduler.go "$engine_temp/gopeed/pkg/base/yunx_runtime_schedu
 cp Engine/runtime_scheduler_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_scheduler_test.go"
 cp Engine/downloader_scheduler.go "$engine_temp/gopeed/pkg/download/yunx_scheduler.go"
 cp Engine/rest_storage.go "$engine_temp/gopeed/pkg/rest/yunx_storage.go"
-cp Engine/prefetch_integrity_test.go "$engine_temp/gopeed/internal/fetcher/http/yunx_prefetch_integrity_test.go"
+cp Engine/prefetch_integrity_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_prefetch_integrity_test.go"
 python3 Engine/patch-runtime-proxy.py "$engine_temp/gopeed"
 python3 Engine/patch-scheduler.py "$engine_temp/gopeed"
 python3 Engine/patch-prefetch-integrity.py "$engine_temp/gopeed"
@@ -54,7 +54,8 @@ engine_retry go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_REV"
 # The pinned mobile tool changes the module graph; finalize all checksums before tests/vendor.
 engine_retry go mod tidy
 go test -mod=mod -tags nosqlite -timeout 1m ./pkg/base -run '^TestYunx' -count=1
-go test -mod=mod -tags nosqlite -timeout 1m ./internal/fetcher/http -run '^TestYunxPrefetch' -count=1
+go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/http \
+  -run '^Test(YunxPrefetch.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
 # These upstream end-to-end tests use local httptest servers, not live platforms.
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
 engine_retry gomobile init
