@@ -11,6 +11,7 @@ struct YunXApp: App {
     @StateObject private var assemblies = MediaAssemblyStore()
     @StateObject private var navigation = AppNavigation.shared
     @StateObject private var inbox = ShareInboxModel()
+    @StateObject private var updates = IOSUpdateStore.shared
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearance = "system"
     @AppStorage("accentRGB") private var accent = ThemeColor.initial
@@ -40,7 +41,8 @@ struct YunXApp: App {
             }
             .environmentObject(library)
             .environmentObject(assemblies)
-            .task { await Diagnostics.shared.record(.appOpened); inbox.refresh() }
+            .task { await Diagnostics.shared.record(.appOpened); inbox.refresh(); await updates.check(automatic: true) }
+            .sheet(item: $updates.prompt) { _ in NavigationStack { IOSUpdatesScreen(store: updates, modal: true) } }
             .onChange(of: scenePhase) { _, phase in if phase == .active { inbox.refresh() } }
             .preferredColorScheme(appearance == "system" ? nil : (appearance == "dark" ? .dark : .light))
             .tint(ThemeColor.color(accent))
@@ -265,31 +267,25 @@ struct PortStatusScreen: View {
                     Text("此分支尚未达到桌面版完整功能；编译记录与开发版 IPA 见 GitHub Actions。")
                         .foregroundStyle(.secondary)
                 }
-                Section("已编写，等待真机验证") {
-                    Label("夸克 / UC 分享解析与个人目录", systemImage: "externaldrive")
-                    Label("网页登录、账号验证与 Cookie 刷新", systemImage: "person.crop.circle")
-                    Label("B 站单文件解析、分 P 与画质", systemImage: "play.rectangle")
-                    Label("Pixiv 多页原图与批量下载", systemImage: "photo.on.rectangle")
-                    Label("原生 MP4 与图片预览", systemImage: "play.circle")
-                    Label("HTTP(S) 直链与公开 HTTPS 后台会话", systemImage: "doc")
-                    Label("暂停、断点数据保存、重试", systemImage: "pause.circle")
-                    Label("任务记录与文件导出", systemImage: "square.and.arrow.up")
-                    Label("Keychain 多账号凭证存储", systemImage: "key")
-                    Label("GitHub 目录、README、Releases 与账号浏览", systemImage: "shippingbox")
-                    Label("123 登录、游标目录与签名取链", systemImage: "externaldrive")
-                    Label("口令加密认证备份与恢复预览", systemImage: "lock.shield")
+                Section("开发功能（设备验收待完成）") {
+                    Label("十个网盘的登录、目录、取链与各自支持的文件管理", systemImage: "externaldrive")
+                    Label("七个媒体平台解析、原图及原生预览", systemImage: "photo.on.rectangle")
+                    Label("HLS、DASH 合轨和视频片段拼接", systemImage: "play.rectangle")
+                    Label("原生动态照片生成、预览与添加到照片", systemImage: "livephoto")
+                    Label("后台公开 HTTPS、前台鉴权与原生多连接下载", systemImage: "arrow.down.circle")
+                    Label("磁力、种子、ed2k 与 Tracker/DHT 管理", systemImage: "network")
+                    Label("多账号、加密备份、历史与收藏", systemImage: "key")
+                    Label("GitHub 浏览、资源浏览器与系统分享收件箱", systemImage: "shippingbox")
                 }
-                Section("尚未移植") {
+                Section("仍在补齐与验收") {
                     ForEach([
-                        "其他网盘适配与转存管理",
-                        "其余视频平台、B 站 DASH 合轨及 Pixiv 动图",
-                        "GitHub 子路径链接、镜像和测速",
-                        "多线程分片、校验、限速与多源下载",
-                        "HLS、DASH 合轨与 Live Photo",
-                        "BT、磁力、ed2k 与 Gopeed 引擎",
-                        "其他平台登录/令牌适配与运行诊断",
-                        "分享扩展、浏览器集成与后台真机验收"
+                        "统一调度、限速、多源及慢连接设置",
+                        "GitHub 镜像测速与回退",
+                        "存储目录、数据迁移与网络代理",
+                        "真实账号、分享权限、图库保存与设备后台恢复"
                     ], id: \.self) { Text($0) }
+                    Text("Pixiv 目前提供静态原图；平台权限、会员和验证要求仍由各平台决定。")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("开源") {
                     Link("源码与移植说明", destination: URL(string: "https://github.com/zwthys-cyber/YunX-Desktop/tree/ios-port/ios")!)

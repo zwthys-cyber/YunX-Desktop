@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Ported from BilibiliParser.kt and PixivParser.kt; single-file media only.
+// Native protocol adapters, including Bilibili single-file and DASH media.
 import Foundation
 
 final class MediaNoRedirect: NSObject, URLSessionTaskDelegate {

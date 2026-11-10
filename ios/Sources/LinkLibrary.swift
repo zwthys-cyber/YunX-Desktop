@@ -113,6 +113,7 @@ struct SettingsScreen: View {
     }
     var body: some View {
         Form {
+            Section("版本") { NavigationLink("iOS 更新") { IOSUpdatesScreen(store: .shared) } }
             Section("外观") {
                 Picker("主题", selection: $appearance) {
                     Text("跟随系统").tag("system")
