@@ -298,7 +298,7 @@ struct PortStatusScreen: View {
                     Label("多账号、加密备份、历史与收藏", systemImage: "key")
                     Label("GitHub 浏览、资源浏览器与系统分享收件箱", systemImage: "shippingbox")
                     Label("共享任务并发、自动退避重试与断点加密", systemImage: "arrow.triangle.2.circlepath")
-                    Label("GitHub 镜像、网络代理与下载目录迁移", systemImage: "externaldrive.badge.gearshape")
+                    Label("GitHub 镜像、网络代理与下载目录迁移", systemImage: "gearshape.2")
                 }
                 Section("仍在补齐与验收") {
                     ForEach([
