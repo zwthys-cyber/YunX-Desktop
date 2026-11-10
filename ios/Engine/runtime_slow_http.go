@@ -19,6 +19,11 @@ var yunxSlowHTTP = struct {
 
 var errYunxSlowHTTP = errors.New("native HTTP connection stayed below the configured minimum speed")
 func YunxIsSlowHTTPConnection(err error) bool { return errors.Is(err, errYunxSlowHTTP) }
+func YunxSlowHTTPEnabled() bool {
+    yunxSlowHTTP.RLock()
+    defer yunxSlowHTTP.RUnlock()
+    return yunxSlowHTTP.enabled
+}
 
 func YunxSetNativeHTTPSlowConnections(enabled bool, minimumKiB, seconds int) error {
     if minimumKiB < 4 || minimumKiB > 10240 || seconds < 5 || seconds > 600 { return errors.New("invalid slow HTTP connection policy") }

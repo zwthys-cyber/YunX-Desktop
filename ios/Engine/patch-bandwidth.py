@@ -24,8 +24,10 @@ func (f *Fetcher) responseReaderWithBudget(resp *http.Response, cancel context.C
         if resp.Request != nil { budgetContext = resp.Request.Context() }
     }
     reader := base.YunxNativeHTTPReader(budgetContext, NewTimeoutReader(resp.Body, readTimeout, cancel), stop)
+    if !base.YunxSlowHTTPEnabled() { return reader }
     f.connMu.Lock()
     resumable := f.meta != nil && f.meta.Res != nil && f.meta.Res.Range && f.ifRange != "" && f.hasKnownSize()
+    if resumable { f.rangeValidatorPinned = true }
     f.connMu.Unlock()
     if resumable {
         responseContext := budgetContext
