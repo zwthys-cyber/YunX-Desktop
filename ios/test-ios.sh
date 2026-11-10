@@ -13,6 +13,7 @@ java Fixtures/ILanzouFixture.java > Tests/ilanzou-vectors.json
 java Fixtures/C139Fixture.java > Tests/c139-vectors.json
 java Fixtures/Pan115Fixture.java > Tests/pan115-vectors.json
 java Fixtures/LanzouFixture.java > Tests/lanzou-vectors.json
+swift Fixtures/GenerateAppIcon.swift Artwork/AppIconSource.png Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 xcodegen generate
 mkdir -p build
 simulator_info="$(python3 - <<'PY'

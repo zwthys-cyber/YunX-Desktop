@@ -13,6 +13,7 @@ fi
 cd -- "$(dirname -- "$0")"
 command -v xcodegen >/dev/null || { echo "请先安装 XcodeGen。" >&2; exit 1; }
 xcrun --find xcodebuild >/dev/null
+swift Fixtures/GenerateAppIcon.swift Artwork/AppIconSource.png Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 xcodegen generate
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/yunx-build.XXXXXXXX")"
 trap 'rm -rf -- "$build_dir"' EXIT

@@ -65,3 +65,4 @@ yunx_log_*.txt
 ios/Tests/backup-vectors.json
 
 ios/Frameworks/
+ios/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
