@@ -39,7 +39,10 @@ func TestYunxCloudSourceRebindKeepsPrefixValidatorAndPrivateHeaderIsolation(t *t
     payload := make([]byte, 4*1024*1024)
     for i := range payload { payload[i] = byte(i % 251) }
     const tag = `"same-source-content"`
+    var activeSource atomic.Int32
     source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        activeSource.Add(1)
+        defer activeSource.Add(-1)
         if r.Header.Get("Cookie") != "old-source-secret" { w.WriteHeader(401); return }
         w.Header().Set("ETag", tag)
         http.ServeContent(yunxPacedSource{w, r.Context()}, r, "fixture.bin", time.Time{}, bytes.NewReader(payload))
@@ -79,7 +82,9 @@ func TestYunxCloudSourceRebindKeepsPrefixValidatorAndPrivateHeaderIsolation(t *t
     }
     if !partial { t.Fatal("fixture never produced a validated partial range") }
     if err := f.Pause(); err != nil { t.Fatal(err) }
-    select { case <-firstRun: case <-time.After(2*time.Second): t.Fatal("original worker did not stop") }
+    stopDeadline := time.Now().Add(2*time.Second)
+    for activeSource.Load() != 0 && time.Now().Before(stopDeadline) { time.Sleep(5*time.Millisecond) }
+    if activeSource.Load() != 0 { t.Fatal("original source still has a live response after pause") }
     replacement := func() *base.Request {
         return &base.Request{URL: target.URL, Extra: &fhttp.ReqExtra{Method: "GET", Header: map[string]string{}},
             Labels: map[string]string{"yunxCloudTransfer": "new-cloud-id", base.YunxHeaderContextLabel: "new-header-id"}}
@@ -96,10 +101,8 @@ func TestYunxCloudSourceRebindKeepsPrefixValidatorAndPrivateHeaderIsolation(t *t
         if bytes.Contains(metadata, []byte(secret)) { t.Fatal("source credential persisted in request metadata") }
     }
     if err := f.Start(); err != nil { t.Fatal(err) }
-    result := make(chan error, 1)
-    go func() { result <- f.Wait() }()
     select {
-    case err := <-result: if err != nil { t.Fatal(err) }
+    case err := <-firstRun: if err != nil { t.Fatal(err) }
     case <-time.After(15*time.Second): t.Fatal("rebound source did not finish")
     }
     actual, err := os.ReadFile(f.Meta().SingleFilepath())
