@@ -35,13 +35,13 @@ final class CloudTransferContextTests: XCTestCase {
 
     func testRefreshUsesCurrentOriginalAccountAndNewListingToken() async throws {
         let vault = vault()
-        vault.add(platform: CloudProvider.quark.rawValue, remark: "fixture", secret: "fixture-old-cookie")
+        vault.add(platform: CloudProvider.quark.rawValue, remark: "fixture", secret: "__pus=fixture-old-cookie")
         let account = try XCTUnwrap(vault.accounts.first)
         defer { vault.delete(account.id); CloudMockProtocol.handler = nil }
         let value = context(account: account.id)
-        vault.updateSecret(account.id, secret: "fixture-current-cookie")
+        vault.updateSecret(account.id, secret: "__pus=fixture-current-cookie")
         CloudMockProtocol.handler = { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "fixture-current-cookie")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "__pus=fixture-current-cookie")
             let path = request.url!.path
             if path.hasSuffix("/token") { return (200, [:], ["status": 200, "data": ["stoken": "fresh-share-token"]]) }
             if path.hasSuffix("/detail") {
@@ -56,14 +56,14 @@ final class CloudTransferContextTests: XCTestCase {
         let (plan, updated) = try await value.refreshed(vault: vault, session: session())
         XCTAssertEqual(plan.filename, "kept-name.bin")
         XCTAssertEqual(plan.size, 256)
-        XCTAssertEqual(plan.headers["Cookie"], "fixture-current-cookie")
+        XCTAssertEqual(plan.headers["Cookie"], "__pus=fixture-current-cookie")
         XCTAssertEqual(updated.file.token, "fresh-file-token")
         XCTAssertEqual(updated.accountID, account.id)
     }
 
     func testRemovedAccountNeverFallsBackToAnotherSavedAccountOrMakesARequest() async throws {
         let vault = vault()
-        vault.add(platform: CloudProvider.quark.rawValue, remark: "other", secret: "other-account-cookie")
+        vault.add(platform: CloudProvider.quark.rawValue, remark: "other", secret: "__pus=other-account-cookie")
         let other = try XCTUnwrap(vault.accounts.first)
         defer { vault.delete(other.id); CloudMockProtocol.handler = nil }
         CloudMockProtocol.handler = { _ in XCTFail("Removed account must fail before networking"); throw CloudTransferContext.unavailable }
@@ -81,6 +81,18 @@ final class CloudTransferContextTests: XCTestCase {
         }
         do { _ = try await context().refreshed(vault: vault, session: session()); XCTFail("Expected missing-file failure") }
         catch { XCTAssertTrue(error.localizedDescription.contains("未找到该文件")) }
+    }
+
+    func testEmptyOriginalCredentialDoesNotDowngradeToGuest() async throws {
+        let vault = vault()
+        vault.add(platform: CloudProvider.quark.rawValue, remark: "expired", secret: "__pus=expired")
+        let account = try XCTUnwrap(vault.accounts.first)
+        defer { vault.delete(account.id); CloudMockProtocol.handler = nil }
+        vault.updateSecret(account.id, secret: "")
+        CloudMockProtocol.handler = { _ in XCTFail("Expired original credentials must not trigger guest requests"); throw CloudTransferContext.unavailable }
+        do { _ = try await context(account: account.id).refreshed(vault: vault, session: session()); XCTFail("Expected unavailable-credential failure") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("凭证已失效")) }
+        XCTAssertEqual(vault.accounts.first?.id, account.id)
     }
 
     nonisolated private static func body(_ request: URLRequest) throws -> [String: Any] {

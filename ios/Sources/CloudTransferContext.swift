@@ -43,6 +43,9 @@ struct CloudTransferContext: Codable, Equatable {
             guard let value = vault.accounts.first(where: { $0.id == accountID && $0.platform == provider.rawValue }) else {
                 throw CloudError.message("原任务账号已移除，请重新解析并选择账号。")
             }
+            guard !value.secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw CloudError.message("原任务账号凭证已失效，请重新登录后刷新。")
+            }
             return value
         }
         let initial = try selected()
