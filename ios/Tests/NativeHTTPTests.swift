@@ -188,7 +188,7 @@ final class NativeHTTPTests: XCTestCase {
         defer { fixture.stop() }
         for expected in [digest, String(repeating: "0", count: 64)] {
             let folder = NativeEngine.shared.downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
-            let request: [String: Any] = ["req": ["url": url.absoluteString], "opts": ["path": folder.path, "name": "fixture.bin", "skipAutoCategorize": true,
+            let request: [String: Any] = ["req": ["url": url.absoluteString, "labels": ["yunxPieceIntegrity": "1"]], "opts": ["path": folder.path, "name": "fixture.bin", "skipAutoCategorize": true,
                 "extra": ["connections": 4, "checksum": ["algorithm": "sha256", "expected": expected]]]]
             // Loopback HTTP is limited to this fixture; the production UI accepts HTTPS only.
             let created = try await NativeEngine.shared.invoke("POST", path: "/api/v1/tasks", body: JSONSerialization.data(withJSONObject: request))
