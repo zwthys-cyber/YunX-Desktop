@@ -124,3 +124,43 @@ func TestYunxPiecesRealRangeTransferAndStoredCheckpoint(t *testing.T) {
     if err := resumed.yunxValidateRestoredPieces(); !errors.Is(err, errYunxPieceMismatch) { t.Fatalf("tampered disk checkpoint was reused: %v", err) }
     if !resumed.checksumFailed.Load() { t.Fatal("explicit retry would reuse corrupted pieces") }
 }
+
+func TestYunxPiecesPausedCheckpointCoversARealPartialTransfer(t *testing.T) {
+    payload := bytes.Repeat([]byte{0x37}, 2*yunxPieceBytes)
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("ETag", `"partial-piece-fixture"`)
+        http.ServeContent(yunxPacedSource{w, r.Context()}, r, "fixture.bin", time.Time{}, bytes.NewReader(payload))
+    }))
+    defer server.Close()
+    f := buildFetcher()
+    defer f.Close()
+    f.Meta().Opts = &base.Options{Path: t.TempDir(), Name: "fixture.bin", Extra: &fhttp.OptsExtra{Connections: 2}}
+    if err := f.Resolve(&base.Request{URL: server.URL, Labels: map[string]string{"yunxPieceIntegrity": "1"}}); err != nil { t.Fatal(err) }
+    if err := f.Start(); err != nil { t.Fatal(err) }
+    partial := false
+    deadline := time.Now().Add(10*time.Second)
+    for time.Now().Before(deadline) {
+        f.connMu.Lock()
+        var downloaded int64
+        for _, conn := range f.connections { if conn != nil { downloaded += conn.Downloaded } }
+        partial = downloaded > 16*1024 && downloaded < int64(len(payload))
+        f.connMu.Unlock()
+        if partial { break }
+        time.Sleep(5*time.Millisecond)
+    }
+    if !partial { t.Fatal("no actual partial transfer to checkpoint") }
+    if err := f.Pause(); err != nil { t.Fatal(err) }
+    fm := &FetcherManager{}
+    checkpoint, err := fm.Store(f)
+    if err != nil { t.Fatal(err) }
+    encoded, err := json.Marshal(checkpoint)
+    if err != nil { t.Fatal(err) }
+    stored, restore := fm.Restore()
+    if err := json.Unmarshal(encoded, stored); err != nil { t.Fatal(err) }
+    resumed := restore(f.Meta(), stored).(*Fetcher)
+    if err := resumed.yunxValidateRestoredPieces(); err != nil { t.Fatalf("valid persisted partial body rejected: %v", err) }
+    // Deleting digests must not let a byte count become resumable evidence.
+    stored.(*fetcherData).YunxPieces.Records = nil
+    resumed = restore(f.Meta(), stored).(*Fetcher)
+    if err := resumed.yunxValidateRestoredPieces(); !errors.Is(err, errYunxPieceMismatch) { t.Fatalf("unhashed partial progress was reused: %v", err) }
+}

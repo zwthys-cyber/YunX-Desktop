@@ -87,7 +87,7 @@ func TestYunxCloudSourceRebindKeepsPrefixValidatorAndPrivateHeaderIsolation(t *t
     if activeSource.Load() != 0 { t.Fatal("original source still has a live response after pause") }
     replacement := func() *base.Request {
         return &base.Request{URL: target.URL, Extra: &fhttp.ReqExtra{Method: "GET", Header: map[string]string{}},
-            Labels: map[string]string{"yunxCloudTransfer": "new-cloud-id", base.YunxHeaderContextLabel: "new-header-id"}}
+            Labels: map[string]string{"yunxCloudTransfer": "new-cloud-id", "yunxPieceIntegrity": "0", base.YunxHeaderContextLabel: "new-header-id"}}
     }
     if updated, err := f.YunxRebindCloudSource(replacement(), int64(len(payload)+1)); err != nil || updated { t.Fatalf("changed size was accepted: %v %v", updated, err) }
     unsafe := replacement()
@@ -95,6 +95,7 @@ func TestYunxCloudSourceRebindKeepsPrefixValidatorAndPrivateHeaderIsolation(t *t
     if _, err := f.YunxRebindCloudSource(unsafe, int64(len(payload))); err == nil { t.Fatal("plaintext replacement credential accepted") }
     if f.Meta().Req.URL != source.URL { t.Fatal("a rejected replacement changed the old request") }
     if updated, err := f.YunxRebindCloudSource(replacement(), int64(len(payload))); err != nil || !updated { t.Fatalf("validated source was not rebound: %v %v", updated, err) }
+    if f.Meta().Req.Labels["yunxPieceIntegrity"] != "1" { t.Fatal("source refresh disabled piece verification") }
     metadata, err := json.Marshal(f.Meta().Req)
     if err != nil { t.Fatal(err) }
     for _, secret := range []string{"old-source-secret", "new-source-secret", "must-not-enter-metadata"} {

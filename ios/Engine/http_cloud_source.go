@@ -51,7 +51,12 @@ func (f *Fetcher) YunxRebindCloudSource(req *base.Request, expectedSize int64) (
     f.meta.Req.URL, f.meta.Req.RawURL = req.URL, req.URL
     f.meta.Req.Extra = extra // Replace; never merge stale headers from another source.
     if f.meta.Req.Labels == nil { f.meta.Req.Labels = map[string]string{} }
-    for key, value := range req.Labels { f.meta.Req.Labels[key] = value }
+    for key, value := range req.Labels {
+        // A new URL cannot disable existing digests or retrospectively mark
+        // legacy partial bytes as having been hashed during their write.
+        if key == "yunxPieceIntegrity" { continue }
+        f.meta.Req.Labels[key] = value
+    }
     f.updateRedirectURL("")
     if f.impersonationSession != nil { f.impersonationSession.Clear() }
     return true, nil

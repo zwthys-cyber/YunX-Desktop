@@ -18,8 +18,23 @@ replace_once("f.file.WriteAt(buf[:n], copied)", "f.yunxWriteAt(buf[:n], copied, 
 replace_once("_, writeErr := f.file.WriteAt(data, writeOffset)", "_, writeErr := f.yunxWriteAt(data, writeOffset, conn.ID)")
 replace_once("_, writeErr := f.file.WriteAt(buf[:n], writeOffset)", "_, writeErr := f.yunxWriteAt(buf[:n], writeOffset, conn.ID)")
 replace_once("f.prepareFullRedownload()", "f.prepareFullRedownload()\n            f.yunxResetPieces()")
+replace_once("state := f.getState()\n\tif state == stateDone {", "state := f.getState()\n    if state == statePaused && f.checksumFailed.Load() { state = stateError; f.setState(stateError) }\n\tif state == stateDone {")
 replace_once("// Open or create target file first (needed for prefetch copy)", "if f.yunxUsesPieces() && (state == statePaused || state == stateError) { f.yunxPieces.restored = true }\n    if err := f.yunxValidateRestoredPieces(); err != nil { return err }\n\n    // Open or create target file first (needed for prefetch copy)")
 replace_once("func (f *Fetcher) verifyChecksum() error {\n", "func (f *Fetcher) verifyChecksum() error {\n    if err := f.yunxVerifyPieces(true); err != nil {\n        if errors.Is(err, errYunxPieceMismatch) { f.checksumFailed.Store(true) }\n        return err\n    }\n")
+# Sync validated tasks before publishing their completed status. The pause
+# checkpoints are checked against disk again before a later network request.
+old = '''\t// This ensures the file handle is released before Wait() returns
+\tf.fileMu.Lock()
+\tif f.file != nil {
+\t\tf.file.Close()'''
+new = '''\t// This ensures the file handle is released before Wait() returns
+\tf.fileMu.Lock()
+\tif f.file != nil {
+        if f.yunxUsesPieces() {
+            if syncErr := f.file.Sync(); syncErr != nil && finalErr == nil { finalErr = syncErr }
+        }
+\t\tf.file.Close()'''
+replace_once(old, new)
 path.write_text(source)
 
 path = root / "fetcher_manager.go"
