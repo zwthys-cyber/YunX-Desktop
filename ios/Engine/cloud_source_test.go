@@ -65,7 +65,7 @@ func TestYunxCloudSourceRebindKeepsPrefixValidatorAndPrivateHeaderIsolation(t *t
     f := buildFetcher()
     defer f.Close()
     f.Meta().Opts = &base.Options{Path: t.TempDir(), Name: "fixture.bin", Extra: &fhttp.OptsExtra{Connections: 1}}
-    if err := f.Resolve(&base.Request{URL: source.URL, Labels: map[string]string{"yunxCloudTransfer": "old-cloud-id", base.YunxHeaderContextLabel: "old-header-id"}}); err != nil { t.Fatal(err) }
+    if err := f.Resolve(&base.Request{URL: source.URL, Labels: map[string]string{"yunxCloudTransfer": "old-cloud-id", "yunxPieceIntegrity": "1", base.YunxHeaderContextLabel: "old-header-id"}}); err != nil { t.Fatal(err) }
     if err := f.Start(); err != nil { t.Fatal(err) }
     firstRun := make(chan error, 1)
     go func() { firstRun <- f.Wait() }()

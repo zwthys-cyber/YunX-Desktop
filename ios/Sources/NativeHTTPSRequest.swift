@@ -43,6 +43,7 @@ struct NativeHTTPSRequest {
         requestLabels.removeValue(forKey: NativeRequestHeaders.label)
         requestLabels.removeValue(forKey: "yunxExpectedSize")
         requestLabels.removeValue(forKey: "yunxExpectedMedia")
+        requestLabels["yunxPieceIntegrity"] = "1"
         if let expectedSize { requestLabels["yunxExpectedSize"] = String(expectedSize) }
         if let expectedMedia { requestLabels["yunxExpectedMedia"] = expectedMedia }
         if let headerContext { requestLabels[NativeRequestHeaders.label] = headerContext.uuidString }

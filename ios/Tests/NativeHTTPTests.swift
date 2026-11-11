@@ -142,10 +142,11 @@ final class NativeHTTPFixture {
 @MainActor
 final class NativeHTTPTests: XCTestCase {
     func testZIPPolicyReachesTheNativeRequestAndCannotBeOverriddenByLabels() throws {
-        let request = try NativeHTTPSRequest(text: "https://files.example.test/archive.zip", labels: ["yunxExpectedMedia": "other"], expectedMedia: "zip")
+        let request = try NativeHTTPSRequest(text: "https://files.example.test/archive.zip", labels: ["yunxExpectedMedia": "other", "yunxPieceIntegrity": "0"], expectedMedia: "zip")
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: request.body(folder: URL(fileURLWithPath: "/tmp/fixture"))) as? [String: Any])
         let req = try XCTUnwrap(root["req"] as? [String: Any])
         XCTAssertEqual((req["labels"] as? [String: String])?["yunxExpectedMedia"], "zip")
+        XCTAssertEqual((req["labels"] as? [String: String])?["yunxPieceIntegrity"], "1")
         XCTAssertThrowsError(try NativeHTTPSRequest(text: "https://files.example.test/data", expectedMedia: "unimplemented-format"))
     }
     func testDeclaredHTTPDotfileCanBeExportedWithoutUnrelatedHiddenFiles() throws {

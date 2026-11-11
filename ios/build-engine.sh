@@ -50,6 +50,8 @@ cp Engine/runtime_slow_http_test.go "$engine_temp/gopeed/pkg/base/yunx_runtime_s
 cp Engine/slow_http_transfer_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_slow_http_transfer_test.go"
 cp Engine/http_options.go "$engine_temp/gopeed/internal/protocol/http/yunx_http_options.go"
 cp Engine/http_cloud_source.go "$engine_temp/gopeed/internal/protocol/http/yunx_cloud_source.go"
+cp Engine/http_piece_integrity.go "$engine_temp/gopeed/internal/protocol/http/yunx_piece_integrity.go"
+cp Engine/piece_integrity_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_piece_integrity_test.go"
 cp Engine/cloud_source_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_cloud_source_test.go"
 cp Engine/downloader_cloud_source.go "$engine_temp/gopeed/pkg/download/yunx_cloud_source.go"
 cp Engine/rest_cloud_source.go "$engine_temp/gopeed/pkg/rest/yunx_cloud_source.go"
@@ -73,6 +75,7 @@ python3 Engine/patch-runtime-headers.py "$engine_temp/gopeed"
 python3 Engine/patch-startup-settings.py "$engine_temp/gopeed"
 python3 Engine/patch-expected-size.py "$engine_temp/gopeed"
 python3 Engine/patch-http-options.py "$engine_temp/gopeed"
+python3 Engine/patch-piece-integrity.py "$engine_temp/gopeed"
 cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 engine_retry go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
@@ -82,7 +85,7 @@ engine_retry go mod tidy
 go test -mod=mod -tags nosqlite -timeout 1m ./pkg/base -run '^TestYunx' -count=1
 go test -mod=mod -tags nosqlite -timeout 1m ./internal/httpclient -run '^TestYunx' -count=1
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/http \
-  -run '^Test(YunxPrefetch.*|YunxRuntimeHeaders.*|YunxExpectedSize.*|YunxExpectedMedia.*|YunxSlowHTTP.*|YunxCloudSource.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
+  -run '^Test(YunxPieces.*|YunxPrefetch.*|YunxRuntimeHeaders.*|YunxExpectedSize.*|YunxExpectedMedia.*|YunxSlowHTTP.*|YunxCloudSource.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
 # These upstream end-to-end tests use local httptest servers, not live platforms.
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
 engine_retry gomobile init
