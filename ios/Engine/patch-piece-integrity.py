@@ -42,6 +42,6 @@ source = path.read_text()
 replace_once("type fetcherData struct {", "type fetcherData struct {\n    YunxPieces *yunxPieceSnapshot `json:\",omitempty\"`")
 # Progress is captured first: write hashing precedes progress publication. A
 # later digest snapshot can include extra committed bytes, never fewer bytes.
-replace_once("return &fetcherData{", "var pieces *yunxPieceSnapshot\n    if _f.yunxUsesPieces() {\n        pieces, err = _f.yunxPieces.snapshot()\n        if err != nil { return nil, err }\n    }\n    return &fetcherData{\n        YunxPieces: pieces,")
+replace_once("return &fetcherData{\n", "var pieces *yunxPieceSnapshot\n    if _f.yunxUsesPieces() {\n        pieces, err = _f.yunxPieces.snapshot()\n        if err != nil { return nil, err }\n    }\n    return &fetcherData{\n        YunxPieces: pieces,\n")
 replace_once("return fetcher\n", "fetcher.yunxRestorePieces(fd.YunxPieces)\n        return fetcher\n")
 path.write_text(source)
