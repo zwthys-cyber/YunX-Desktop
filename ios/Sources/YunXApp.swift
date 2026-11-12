@@ -54,6 +54,8 @@ struct YunXApp: App {
 
 @MainActor
 struct DownloadScreen: View {
+    @AppStorage(ManagedHTTPPolicy.preference) private var nativeFiles = false
+    @AppStorage("engineHTTPRateKiB") private var httpRate = 0
     @ObservedObject private var navigation = AppNavigation.shared
     @EnvironmentObject var assemblies: MediaAssemblyStore
     @ObservedObject var store: DownloadStore
@@ -75,6 +77,14 @@ struct DownloadScreen: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("普通文件传输方式") {
+                    Toggle("前台原生校验下载", isOn: Binding(get: { nativeFiles || httpRate > 0 }, set: { nativeFiles = $0 }))
+                        .disabled(httpRate > 0)
+                    Text(httpRate > 0 ? "共享限速已启用，普通文件必须使用原生前台传输，不能由后台会话绕过。" : "原生模式采用分片校验及单连接，任务仍在本页管理；关闭后新任务保留系统后台策略。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("已有系统任务切换后从头下载，原系统断点保留至保存成功。原生模式支持 HTTPS 及本机 HTTP；m3u8 原文请关闭原生模式和限速后保存。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("新建文件直链下载") {
                     TextField("https://…", text: $input, axis: .vertical)
                         .textInputAutocapitalization(.never)
@@ -96,7 +106,7 @@ struct DownloadScreen: View {
                         else { inputError = store.storageError }
                     }
                     if let inputError { Text(inputError).foregroundStyle(.red) }
-                    Text("分享链接请到「网盘」解析。公开 HTTPS 文件使用系统后台传输；带账号或自定义鉴权头的请求使用前台会话。系统可能延迟后台任务，强制退出后需重新打开应用。")
+                    Text("分享链接请到「网盘」解析。普通文件遵循上方传输方式；启用共享限速时使用原生前台传输。系统模式下，公开 HTTPS 可使用后台会话，鉴权请求留在前台。系统可能暂停后台任务，强制退出后需重新打开应用。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error = store.storageError {

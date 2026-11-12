@@ -44,10 +44,12 @@ actor NativeEngine {
     private var headerContextsByTask: [String: UUID] = [:]
     private var cloudContextsByTask: [String: UUID] = [:]
     private var activeOperations = 0
+    private var changingHTTPRate = false
     private var watchedCompletions = Set<String>()
     private var completionMonitor: Task<Void, Never>?
     private let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX/Engine", isDirectory: true)
     nonisolated let downloads = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("P2P", isDirectory: true)
+    nonisolated let managedDownloads = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX/ManagedHTTP", isDirectory: true)
 
     func ensureStarted() async throws {
         if let startup { return try await startup.value }
@@ -60,10 +62,11 @@ actor NativeEngine {
         proxyResolver = resolver
         let headers = IOSHeaderResolver()
         headerResolver = headers
-        let media = IOSMediaVerifier(root: downloads)
+        let media = IOSMediaVerifier(root: downloads, additionalRoot: managedDownloads)
         mediaVerifier = media
         let root = support
         let destination = downloads
+        let managed = managedDownloads
         let dht = UserDefaults.standard.bool(forKey: "engineDHT")
         let savedParallel = UserDefaults.standard.integer(forKey: "engineParallel")
         let parallel = max(1, min(6, savedParallel == 0 ? 3 : savedParallel))
@@ -74,14 +77,14 @@ actor NativeEngine {
             try Self.bindHeaderResolver(headers)
             var mediaError: NSError?
             guard YunxengineSetMediaVerifier(media, &mediaError) else { throw CloudError.message("本地媒体校验服务配置失败。") }
-            for folder in [root, destination] {
+            for folder in [root, destination, managed] {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                     attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
             }
             let config: [String: Any] = [
                 "apiEnable": false, "mcpEnable": false, "storage": "bolt", "storageDir": root.path,
                 // Gopeed uses filepath.Match, not recursive containment. Every task owns one UUID child.
-                "tempDir": root.appendingPathComponent("Cache").path, "whiteDownloadDirs": [destination.path, destination.path + "/*"],
+                "tempDir": root.appendingPathComponent("Cache").path, "whiteDownloadDirs": [destination.path, destination.path + "/*", managed.path, managed.path + "/*"],
                 "downloadConfig": ["downloadDir": destination.path, "maxRunning": parallel, "autoStartTasks": false, "proxy": ["enable": false],
                     "protocolConfig": ["bt": ["disableDht": !dht, "disablePex": true, "autoUpdateTrackers": false,
                         "customTrackers": trackers, "trackerSubscribeUrls": [], "seedKeep": false, "seedRatio": 0, "seedTime": 0]]]
@@ -111,10 +114,24 @@ actor NativeEngine {
             throw CloudError.message("原生 HTTP 限速设置失败。")
         }
     }
-    func setHTTPBandwidthLimit(kibPerSecond: Int) throws {
-        try Self.applyHTTPBandwidthLimit(kibPerSecond)
-        UserDefaults.standard.set(kibPerSecond, forKey: "engineHTTPRateKiB")
+    func setHTTPBandwidthLimit(kibPerSecond: Int) async throws {
+        guard (0...1_048_576).contains(kibPerSecond) else { throw CloudError.message("HTTP 限速需为 0–1048576 KiB/s。") }
+        guard !changingHTTPRate else { throw CloudError.message("正在应用下载限速，请稍后重试。") }
+        changingHTTPRate = true
+        defer { changingHTTPRate = false }
+        do {
+            if kibPerSecond > 0 { try await Self.prepareHTTPRateTransition() }
+            try Task.checkCancellation()
+            try Self.applyHTTPBandwidthLimit(kibPerSecond)
+            UserDefaults.standard.set(kibPerSecond, forKey: "engineHTTPRateKiB")
+            if kibPerSecond > 0 { await Self.finishHTTPRateTransition() }
+        } catch {
+            if kibPerSecond > 0 { await Self.finishHTTPRateTransition() }
+            throw error
+        }
     }
+    @MainActor private static func prepareHTTPRateTransition() async throws { try await DownloadStore.shared.pauseSystemForRateLimit() }
+    @MainActor private static func finishHTTPRateTransition() { DownloadStore.shared.finishHTTPPolicyTransition() }
     private static func applyHTTPTransport(_ preference: NativeHTTPTransportPreference) throws {
         var error: NSError?
         guard YunxengineSetNativeHTTPTransport(preference.http2, preference.bufferKiB, &error) else {
@@ -245,11 +262,14 @@ actor NativeEngine {
         _ = try await invoke("POST", path: "/api/v1/tasks", body: JSONSerialization.data(withJSONObject: request))
     }
     @discardableResult
-    func createHTTPS(_ request: NativeHTTPSRequest) async throws -> String {
+    func createHTTPS(_ request: NativeHTTPSRequest, managedOwner: UUID? = nil) async throws -> String {
         try Task.checkCancellation()
         try await ensureStarted()
         try Task.checkCancellation()
-        let folder = downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let folder = managedOwner.map { managedDownloads.appendingPathComponent($0.uuidString, isDirectory: true) } ?? downloads.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        if let managedOwner {
+            guard request.labels[ManagedHTTPPolicy.label] == managedOwner.uuidString else { throw CloudError.message("普通下载来源不匹配。") }
+        }
         let privateRequest = request.headers.keys.contains { ["cookie", "authorization"].contains($0.lowercased()) }
         let context = privateRequest ? UUID() : nil
         if let context { try NativeRequestHeaders.shared.save(request.headers, original: request.url, id: context) }
@@ -257,13 +277,13 @@ actor NativeEngine {
             let data = try await invoke("POST", path: "/api/v1/tasks", body: request.body(folder: folder, headerContext: context))
             guard let id = try JSONDecoder().decode(EngineEnvelope<String>.self, from: data).data else { throw CloudError.message("引擎未返回任务 ID。") }
             if let context { headerContextsByTask[id] = context }
-            if Task.isCancelled {
+            if Task.isCancelled && managedOwner == nil {
                 _ = try? await invoke("DELETE", path: "/api/v1/tasks/" + id, query: "force=true")
                 throw CancellationError()
             }
             return id
         } catch {
-            if let context { NativeRequestHeaders.shared.delete(context) }
+            if let context, managedOwner == nil { NativeRequestHeaders.shared.delete(context) }
             throw error
         }
     }

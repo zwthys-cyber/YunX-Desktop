@@ -41,7 +41,7 @@ final class P2PStore: ObservableObject {
     @Published var busy = false
     @Published var message: String?
     func refresh() async {
-        do { tasks = try await NativeEngine.shared.tasks().filter { $0.meta?.req?.labels?["yunxAssembly"] == nil } }
+        do { tasks = try await NativeEngine.shared.tasks().filter { $0.meta?.req?.labels?["yunxAssembly"] == nil && $0.meta?.req?.labels?[ManagedHTTPPolicy.label] == nil } }
         catch { if !Task.isCancelled { message = "引擎任务读取失败，请重试。" } }
     }
     func add(_ raw: String, trackers: String) async {
@@ -176,20 +176,20 @@ struct P2PScreen: View {
                 Text("内置原生 Gopeed 引擎，当前按前台任务运行。进入后台可能被系统暂停；不保证后台常驻。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            Section("原生 HTTP 文件限速") {
+            Section("HTTP 文件与 HLS 共享限速") {
                 TextField("KiB/s，0 表示不限", text: $httpRate).keyboardType(.numberPad)
-                Button("保存原生 HTTP 限速") {
+                Button("保存共享限速") {
                     savingRate = true
                     Task { @MainActor in
                         defer { savingRate = false }
                         do {
                             guard let value = Int(httpRate.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw CloudError.message("请输入整数 KiB/s。") }
                             try await NativeEngine.shared.setHTTPBandwidthLimit(kibPerSecond: value)
-                            store.message = value == 0 ? "原生 HTTP 文件下载不限速。" : "原生 HTTP 文件合计限速 \(value) KiB/s。"
+                            store.message = value == 0 ? "HTTP 文件与 HLS 不限速。" : "HTTP 文件与 HLS 合计限速 \(value) KiB/s。系统下载已暂停，继续时改为原生前台传输。"
                         } catch { store.message = error.localizedDescription }
                     }
                 }.disabled(savingRate || store.busy)
-                Text("多个原生文件和连接共享此速率，短时可能突发，底层连接缓冲可能预读。普通下载页的系统会话、HLS 和 P2P 不在此限速范围内；修改对运行中的原生 HTTP 文件读取生效。")
+                Text("多个 HTTP 文件、HLS 分片/播放列表/密钥共享同一预算，短时允许突发及底层预读。启用时先暂停系统下载；继续时普通队列改用单连接原生前台传输并从头下载，旧系统断点保留至保存成功。只支持 HTTPS 文件及本机 HTTP；关闭限速后新任务可恢复系统模式。P2P、在线播放和接口请求不在此范围内。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("引擎设置") {

@@ -23,7 +23,8 @@ func YunxNativeHTTPBandwidthLimited() bool {
     return yunxBandwidth.limiter != nil
 }
 
-// This budget is shared by native HTTP file readers, not by P2P or HLS.
+// Shared by native HTTP files and HLS origin readers. Production's local HTTP
+// relay stays unwrapped so the same HLS bytes are not charged a second time.
 func YunxSetNativeHTTPBandwidthLimit(bytesPerSecond int64) error {
     if bytesPerSecond != 0 && (bytesPerSecond < 1024 || bytesPerSecond > 1<<30) {
         return errors.New("invalid native HTTP bandwidth limit")

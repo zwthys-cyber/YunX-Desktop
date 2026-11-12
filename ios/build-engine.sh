@@ -52,6 +52,7 @@ cp Engine/http_options.go "$engine_temp/gopeed/internal/protocol/http/yunx_http_
 cp Engine/http_cloud_source.go "$engine_temp/gopeed/internal/protocol/http/yunx_cloud_source.go"
 cp Engine/http_piece_integrity.go "$engine_temp/gopeed/internal/protocol/http/yunx_piece_integrity.go"
 cp Engine/piece_integrity_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_piece_integrity_test.go"
+cp Engine/hls_bandwidth_test.go "$engine_temp/gopeed/internal/protocol/hls/yunx_bandwidth_test.go"
 cp Engine/cloud_source_test.go "$engine_temp/gopeed/internal/protocol/http/yunx_cloud_source_test.go"
 cp Engine/downloader_cloud_source.go "$engine_temp/gopeed/pkg/download/yunx_cloud_source.go"
 cp Engine/rest_cloud_source.go "$engine_temp/gopeed/pkg/rest/yunx_cloud_source.go"
@@ -76,6 +77,7 @@ python3 Engine/patch-startup-settings.py "$engine_temp/gopeed"
 python3 Engine/patch-expected-size.py "$engine_temp/gopeed"
 python3 Engine/patch-http-options.py "$engine_temp/gopeed"
 python3 Engine/patch-piece-integrity.py "$engine_temp/gopeed"
+python3 Engine/patch-hls-bandwidth.py "$engine_temp/gopeed"
 cd "$engine_temp/gopeed"
 export PATH="$(go env GOPATH)/bin:$PATH"
 engine_retry go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_REV"
@@ -87,7 +89,7 @@ go test -mod=mod -tags nosqlite -timeout 1m ./internal/httpclient -run '^TestYun
 go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/http \
   -run '^Test(YunxPieces.*|YunxPrefetch.*|YunxRuntimeHeaders.*|YunxExpectedSize.*|YunxExpectedMedia.*|YunxSlowHTTP.*|YunxCloudSource.*|Fetcher_(StartBeforePrefetchDoneCopiesFullBody|RestoredStartSkipsAbsentPrefetch|PauseBeforeStartDiscardsPrefetchProgress|UnknownSizeResolveCleanEOFUpdatesSize|UnknownSizeResolveReadErrorFailsTask|UnknownSizeRangeFallsBackToResolve|UsesResolveResponseWhenRangeTakeoverFails|ValidRangeTakesOverResolveResponse|UnknownSizeRangeRemainsOpenEndedAfterPause))$' -count=1
 # These upstream end-to-end tests use local httptest servers, not live platforms.
-go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^TestFetcherE2E_' -count=1
+go test -mod=mod -tags nosqlite -timeout 3m ./internal/protocol/hls -run '^Test(FetcherE2E_|YunxHLS)' -count=1
 engine_retry gomobile init
 case "$(uname -m)" in
   arm64) engine_targets="ios/arm64,iossimulator/arm64" ;;

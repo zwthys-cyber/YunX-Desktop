@@ -10,8 +10,9 @@ struct NativeHTTPSRequest {
     let labels: [String: String]
     let expectedSize: Int64?
     let expectedMedia: String?
-    init(text: String, filename: String = "", connections: Int = 4, checksum: String = "", headers: [String: String] = [:], labels: [String: String] = [:], accountHeaders: Bool = false, expectedSize: Int64? = nil, expectedMedia: String? = nil) throws {
-        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme?.lowercased() == "https",
+    init(text: String, filename: String = "", connections: Int = 4, checksum: String = "", headers: [String: String] = [:], labels: [String: String] = [:], accountHeaders: Bool = false, expectedSize: Int64? = nil, expectedMedia: String? = nil, allowLoopbackHTTP: Bool = false) throws {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme?.lowercased() == "https" || (allowLoopbackHTTP && url.scheme?.lowercased() == "http" && ["localhost", "127.0.0.1", "::1", "[::1]"].contains(url.host?.lowercased() ?? "")),
               url.host != nil, url.user == nil, url.password == nil, url.pathExtension.lowercased() != "m3u8" else {
             throw CloudError.message("请输入不含账号密码的 HTTPS 文件直链；HLS 请从媒体解析加入。")
         }

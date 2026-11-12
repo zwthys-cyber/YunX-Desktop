@@ -36,6 +36,8 @@ struct DownloadItem: Codable, Identifiable {
     var retryCount: Int?
     var retryAt: Date?
     var pendingSave: Bool?
+    var nativeTransfer: Bool?
+    var nativeTaskID: String?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -68,14 +70,20 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     private let manager = FileManager.default
     private var unreadableIndex = false
     private var retryWake: DispatchWorkItem?
+    private let nativeEnabled: Bool
+    private var nativeWork: [UUID: Task<Void, Never>] = [:]
+    private var nativeDeletes = Set<UUID>()
+    private var nativeDeleteRecords = Set<UUID>()
+    private var nativeCleanup: [UUID: Task<Void, Never>] = [:]
+    private var networkPolicyTransition = false
 
     override convenience init() {
         self.init(root: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Downloads", isDirectory: true),
-                  cache: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX", isDirectory: true), backgroundEnabled: true)
+                  cache: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YunX", isDirectory: true), backgroundEnabled: true, nativeEnabled: true)
     }
 
-    init(root: URL, cache: URL, configuration: URLSessionConfiguration = .default, backgroundEnabled: Bool = false) {
-        self.root = root; self.cache = cache
+    init(root: URL, cache: URL, configuration: URLSessionConfiguration = .default, backgroundEnabled: Bool = false, nativeEnabled: Bool = false) {
+        self.root = root; self.cache = cache; self.nativeEnabled = nativeEnabled
         super.init()
         YunxengineSetGlobalDownloadLimit(maximumConcurrent)
         do {
@@ -83,6 +91,11 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
             try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: protection)
             try manager.createDirectory(at: cache, withIntermediateDirectories: true, attributes: protection)
+            let deletions = cache.appendingPathComponent("native-deletes.json")
+            if manager.fileExists(atPath: deletions.path) {
+                let journal = try JSONDecoder().decode(NativeCleanupJournal.self, from: Data(contentsOf: deletions))
+                nativeDeletes = journal.owners; nativeDeleteRecords = journal.removed
+            }
             let index = cache.appendingPathComponent("tasks.json")
             if manager.fileExists(atPath: index.path) {
                 items = try JSONDecoder().decode([DownloadItem].self, from: Data(contentsOf: index))
@@ -91,7 +104,10 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                     items[index].state = .paused
                 }
                 for index in items.indices {
-                    if items[index].state == .completed { DownloadFileSave.discard(cache: cache, id: items[index].id) }
+                    if items[index].state == .completed {
+                        DownloadFileSave.discard(cache: cache, id: items[index].id)
+                        if items[index].nativeTaskID != nil { nativeDeletes.insert(items[index].id) }
+                    }
                     else if items[index].pendingSave == true || DownloadFileSave.pending(cache: cache, id: items[index].id) {
                         if DownloadFileSave.bodyMissing(cache: cache, id: items[index].id) {
                             items[index].pendingSave = nil
@@ -132,6 +148,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 DispatchQueue.main.async { self?.restoreBackground(tasks) }
             }
         }
+        if !nativeDeletes.isEmpty, saveNativeDeletes() { for owner in nativeDeletes { scheduleNativeCleanup(owner) } }
     }
 
     @discardableResult
@@ -172,7 +189,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     func start(_ id: UUID) {
         guard !DownloadStorage.isMigrating else { return }
-        guard !unreadableIndex, active[id] == nil, saveWorkers[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
+        guard !unreadableIndex, active[id] == nil, nativeWork[id] == nil, saveWorkers[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               [.waiting, .paused, .failed].contains(items[index].state) else { return }
         let previous = items[index]
         items[index].state = .waiting
@@ -183,11 +200,11 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     private func drainQueue() {
-        guard !unreadableIndex, !restoringBackground, !DownloadStorage.isMigrating else { return }
+        guard !unreadableIndex, !restoringBackground, !networkPolicyTransition, !DownloadStorage.isMigrating else { return }
         retryWake?.cancel(); retryWake = nil
         let now = Date()
         for id in items.reversed().filter({ $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }).map(\.id) {
-            guard Set(active.keys).union(saveWorkers.keys).count < max(1, min(6, maximumConcurrent)), YunxengineAvailableDownloadSlots() > 0 else { break }
+            guard Set(active.keys).union(saveWorkers.keys).union(nativeWork.keys).count < max(1, min(6, maximumConcurrent)), YunxengineAvailableDownloadSlots() > 0 else { break }
             launch(id)
         }
         if let date = items.filter({ $0.state == .waiting }).compactMap(\.retryAt).filter({ $0 > now }).min() {
@@ -195,7 +212,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             retryWake = work
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, date.timeIntervalSinceNow), execute: work)
         }
-        if Set(active.keys).union(saveWorkers.keys).count < max(1, min(6, maximumConcurrent)), items.contains(where: { $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }) {
+        if Set(active.keys).union(saveWorkers.keys).union(nativeWork.keys).count < max(1, min(6, maximumConcurrent)), items.contains(where: { $0.state == .waiting && ($0.retryAt ?? .distantPast) <= now }) {
             retryWake?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.drainQueue() }
             retryWake = work
@@ -231,7 +248,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     private func launch(_ id: UUID) {
         guard !DownloadStorage.isMigrating else { return }
-        guard active[id] == nil, saveWorkers[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
+        guard active[id] == nil, nativeWork[id] == nil, saveWorkers[id] == nil, let index = items.firstIndex(where: { $0.id == id }),
               items[index].state != .completed, items[index].state != .pausing else { return }
         if items[index].pendingSave == true {
             let slot = id.uuidString + ".save." + UUID().uuidString
@@ -240,6 +257,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             beginSave(id)
             return
         }
+        guard !nativeDeletes.contains(id) else { return }
         guard NetworkProxy.ready else { items[index].state = .failed; items[index].error = "代理设置不可用，请到设置中修复后重试。"; save(); return }
         var request = URLRequest(url: items[index].url)
         var headers: [String: String] = [:]
@@ -255,6 +273,16 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 save()
                 return
             }
+        }
+        if items[index].nativeTransfer == true || (nativeEnabled && ManagedHTTPPolicy.preferred) {
+            items[index].nativeTransfer = true
+            items[index].backgroundTransfer = false
+            items[index].state = .downloading
+            items[index].error = nil
+            guard save() else { items[index].state = .failed; return }
+            let item = items[index]
+            nativeWork[id] = Task { @MainActor [self] in await runNative(item, headers: headers) }
+            return
         }
         let usesBackground = backgroundSession != nil && BackgroundDownloadPolicy.allows(items[index].url, headers: headers)
         let targetSession = usesBackground ? backgroundSession! : session!
@@ -310,7 +338,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 _ = YunxengineAcquireHTTPTask(slot, true)
                 transferSlots[id] = slot
             }
-            if restorableBackground.contains(id) {
+            if restorableBackground.contains(id) && !networkPolicyTransition && !(nativeEnabled && ManagedHTTPPolicy.rateEnabled) {
                 items[index].state = .downloading; items[index].error = nil
                 items[index].received = max(items[index].received, task.countOfBytesReceived)
                 if task.countOfBytesExpectedToReceive > 0 { items[index].expected = task.countOfBytesExpectedToReceive }
@@ -321,6 +349,12 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
     }
 
     func pause(_ id: UUID) {
+        if let work = nativeWork[id], let index = items.firstIndex(where: { $0.id == id }) {
+            items[index].state = .pausing
+            save()
+            work.cancel()
+            return
+        }
         if let worker = saveWorkers[id], let index = items.firstIndex(where: { $0.id == id }) {
             items[index].state = .pausing
             save()
@@ -360,19 +394,27 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         pauseAll()
         // Deleting a record removes it from active immediately, but its physical
         // transfer still owns a slot until the completion callback closes it.
-        while !active.isEmpty || !transferSlots.isEmpty || !saveWork.isEmpty {
+        while !active.isEmpty || !transferSlots.isEmpty || !saveWork.isEmpty || !nativeWork.isEmpty || !nativeCleanup.isEmpty || networkPolicyTransition {
             guard Date() < deadline else { throw DownloadStorageError.busy }
             try await Task.sleep(for: .milliseconds(100))
         }
-        guard !unreadableIndex, save() else { throw DownloadStorageError.unavailable }
+        guard !unreadableIndex, nativeDeletes.isEmpty, save() else { throw DownloadStorageError.unavailable }
     }
 
     func delete(_ id: UUID) {
         guard !unreadableIndex else { return }
+        let isNative = items.first(where: { $0.id == id })?.nativeTransfer == true
+        if isNative {
+            nativeDeletes.insert(id)
+            nativeDeleteRecords.insert(id)
+            guard saveNativeDeletes() else { nativeDeletes.remove(id); nativeDeleteRecords.remove(id); return }
+        }
         let previous = items
         items.removeAll { $0.id == id }
-        guard save() else { items = previous; return }
+        guard save() else { items = previous; if isNative { nativeDeletes.remove(id); nativeDeleteRecords.remove(id); _ = saveNativeDeletes() }; return }
         removed.insert(id)
+        if let work = nativeWork[id] { work.cancel() }
+        else if isNative { scheduleNativeCleanup(id) }
         if let worker = saveWorkers[id] { worker.cancel() }
         else { DownloadFileSave.discard(cache: cache, id: id) }
         if let task = active.removeValue(forKey: id) { task.cancel() }
@@ -403,6 +445,129 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         }
     }
 
+    private struct NativeCleanupJournal: Codable { let owners: Set<UUID>; let removed: Set<UUID> }
+
+    @discardableResult private func saveNativeDeletes() -> Bool {
+        do {
+            try JSONEncoder().encode(NativeCleanupJournal(owners: nativeDeletes, removed: nativeDeleteRecords)).write(
+                to: cache.appendingPathComponent("native-deletes.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            return true
+        } catch { storageError = "无法保存原生清理记录，文件已保留。"; return false }
+    }
+
+    private func requestNativeCleanup(_ owner: UUID) {
+        nativeDeletes.insert(owner)
+        if saveNativeDeletes() { scheduleNativeCleanup(owner) }
+    }
+
+    private func scheduleNativeCleanup(_ owner: UUID) {
+        guard !unreadableIndex, nativeCleanup[owner] == nil, nativeWork[owner] == nil else { return }
+        nativeCleanup[owner] = Task { @MainActor [self] in
+            defer { nativeCleanup.removeValue(forKey: owner); drainQueue() }
+            for attempt in 0..<3 {
+                do {
+                    try await NativeEngine.shared.removeManaged(owner)
+                    nativeDeletes.remove(owner)
+                    if nativeDeleteRecords.remove(owner) != nil {
+                        items.removeAll { $0.id == owner }
+                        if saveWorkers[owner] == nil { DownloadFileSave.discard(cache: cache, id: owner) }
+                        DownloadHeaders.delete(owner)
+                        try? manager.removeItem(at: resumeURL(owner))
+                    } else if let index = items.firstIndex(where: { $0.id == owner }) { items[index].nativeTaskID = nil }
+                    _ = saveNativeDeletes(); save()
+                    return
+                } catch {
+                    if attempt < 2 { try? await Task.sleep(for: .milliseconds(500 * (attempt + 1))) }
+                }
+            }
+            storageError = "原生任务仍待清理，清理记录已保留；请恢复引擎后重新打开应用。"
+        }
+    }
+
+    @MainActor private func runNative(_ original: DownloadItem, headers: [String: String]) async {
+        let id = original.id
+        defer {
+            nativeWork.removeValue(forKey: id)
+            if nativeDeletes.contains(id) { scheduleNativeCleanup(id) }
+            drainQueue()
+        }
+        do {
+            let taskID: String
+            if let existing = try await NativeEngine.shared.managedTask(id) { taskID = existing.id }
+            else {
+                guard original.nativeTaskID == nil else { throw CloudError.message("原生断点记录不可用，请保留文件并重新解析。") }
+                taskID = try await NativeEngine.shared.createManaged(id, url: original.url, filename: original.filename,
+                    headers: headers, size: original.requiredSize, kind: original.expectedMedia, connections: 1)
+            }
+            try Task.checkCancellation()
+            guard let index = items.firstIndex(where: { $0.id == id }), !removed.contains(id) else { throw CancellationError() }
+            items[index].nativeTaskID = taskID
+            guard save() else { throw CloudError.message("原生状态未保存，已暂停下载。") }
+            if let current = try await NativeEngine.shared.managedTask(id), ["pause", "error"].contains(current.status) {
+                _ = try await NativeEngine.shared.invoke("PUT", path: "/api/v1/tasks/" + taskID + "/continue")
+            }
+            while true {
+                try Task.checkCancellation()
+                guard let task = try await NativeEngine.shared.managedTask(id) else { throw CloudError.message("原生任务已被移除，请重新解析下载。") }
+                try Task.checkCancellation()
+                guard let index = items.firstIndex(where: { $0.id == id }), !removed.contains(id) else { throw CancellationError() }
+                items[index].received = task.progress?.downloaded ?? items[index].received
+                items[index].expected = task.meta?.res?.size ?? items[index].expected
+                if task.status == "done" {
+                    let file = try NativeEngine.shared.managedOutput(task, owner: id)
+                    try DownloadFileSave.retain(file, cache: cache, id: id, proposed: items[index].filename,
+                        kind: items[index].expectedMedia, mime: nil, requiredSize: items[index].requiredSize)
+                    items[index].pendingSave = true
+                    items[index].state = .waiting
+                    guard save() else { items[index].state = .paused; return }
+                    requestNativeCleanup(id)
+                    return
+                }
+                if task.status == "error" { throw CloudError.message("原生下载未完成，片段已保留；重试时会重新校验。") }
+                if task.status == "pause" {
+                    items[index].state = .paused; save(); return
+                }
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        } catch {
+            // A cancelled UI operation still must await physical engine pause.
+            let paused = await Task.detached { () -> Bool in
+                do { try await NativeEngine.shared.pauseManaged(id); return true } catch { return false }
+            }.value
+            guard let index = items.firstIndex(where: { $0.id == id }), !removed.contains(id) else { return }
+            if items[index].pendingSave == true { items[index].state = .paused }
+            else { items[index].state = error is CancellationError && paused ? .paused : .failed }
+            items[index].error = error is CancellationError && paused ? nil : "原生下载未完成，请检查网络、存储和来源后重试；原片段已保留。"
+            save()
+        }
+    }
+
+    @MainActor func pauseSystemForRateLimit() async throws {
+        networkPolicyTransition = true
+        do {
+            let deadline = Date().addingTimeInterval(60)
+            while restoringBackground {
+                guard Date() < deadline else { throw DownloadStorageError.busy }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            for id in Array(active.keys) { pause(id) }
+            while !active.isEmpty {
+                guard Date() < deadline else { throw DownloadStorageError.busy }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            for index in items.indices where items[index].nativeTransfer != true && items[index].pendingSave != true && [.waiting, .paused, .failed].contains(items[index].state) {
+                items[index].state = .paused
+                items[index].error = "已启用共享限速。继续将从头使用原生前台下载，旧系统断点保留至保存成功。"
+            }
+            guard !unreadableIndex, save() else { throw DownloadStorageError.unavailable }
+        } catch {
+            finishHTTPPolicyTransition()
+            throw error
+        }
+    }
+
+    @MainActor func finishHTTPPolicyTransition() { networkPolicyTransition = false; drainQueue() }
+
     private func resumeURL(_ id: UUID) -> URL {
         cache.appendingPathComponent("\(id.uuidString).resume")
     }
@@ -410,6 +575,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         if let slot = transferSlots.removeValue(forKey: id) { YunxengineReleaseHTTPTask(slot) }
     }
     private func matchesTask(_ session: URLSession, task: URLSessionTask, id: UUID) -> Bool {
+        guard items.first(where: { $0.id == id })?.nativeTransfer != true else { return false }
         if let identity = latestTaskIdentity[id] { return identity == ObjectIdentifier(task) }
         // A completed background event can arrive before or after getAllTasks.
         // Only this store's real background session can adopt an unknown task.
@@ -546,6 +712,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
                 DownloadFileSave.discard(cache: cache, id: id)
                 try? manager.removeItem(at: resumeURL(id))
                 DownloadHeaders.delete(id)
+                if items[index].nativeTransfer == true { requestNativeCleanup(id) }
                 notifyCompleted(size: output.size)
             case .failure(let error):
                 items[index].state = error is CancellationError ? .paused : .failed
