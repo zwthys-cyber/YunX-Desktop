@@ -4,6 +4,8 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 ## 构建与验证状态
 
+**2026-11-12：最新源码尚未验证。** 普通队列原生传输、HTTP/HLS 共享限速及 HLS 分片摘要已补入源码；GitHub 拒绝启动工作流，返回 `HTTP 422: Actions has been disabled for this repository`，重新启用工作流仍未恢复。请以 [验收表](PORTING.md) 的执行阻塞记录为准；以下 203 项和 IPA 只对应旧的成功提交，不能用于证明本批源码已通过。服务器没有执行编译、测试或验证脚本。
+
 最后完整成功的基线为 [`4870fec`](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43031952929)：203 项模拟器测试零失败、独立 Java 对 iOS 加密备份的反向解密、主应用与分享扩展设备编译及 IPA 打包成功。该轮 IPA 的 SHA-256 为 `e07f0a10e4218b657c297b8657f3234d3a818cf20e0233d5b839b11a4b6c285b`。包含 GitHub 原生入口、ZIP/点文件、普通媒体原生下载/校验桥、公开 HTTPS 降级防护，以及真实原生下载中的分片校验。
 
 该轮包含真实钥匙串访问、Swift/Go HTTP 代理、共享任务配额、实际 HTTP 503 退避重试、目录迁移、GitHub 鉴权/ZIP/镜像策略、断点加密及原生 HTTP 共享限速的实际字节传输。账号请求头通过真实 HTTP、跨源重定向、Keychain 重读及磁盘无明文凭证检查；引擎并发和 Tracker 设置重启恢复也通过。保存用例覆盖缓存、发布后恢复、取消、同名保护及缓存缺失后的再次启动；网盘来源覆盖原账号当前凭证、新文件令牌和失效账号拒绝。对应引擎源码另通过真实 TLS 协商/证书信任、大小不匹配拒绝、预读故障、暂停恢复、共享速率、缓冲预算、慢连接、带鉴权 Range 换链，以及分片写入、不可变断点、磁盘篡改/截断、摘要缺失、未提交写入和真实部分传输用例。后续提交仍须查看其自身 [GitHub Actions](https://github.com/zwthys-cyber/YunX-Desktop/actions?query=branch%3Aios-port) 结果。

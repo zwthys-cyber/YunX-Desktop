@@ -94,6 +94,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             let deletions = cache.appendingPathComponent("native-deletes.json")
             if manager.fileExists(atPath: deletions.path) {
                 let journal = try JSONDecoder().decode(NativeCleanupJournal.self, from: Data(contentsOf: deletions))
+                guard journal.removed.isSubset(of: journal.owners) else { throw DownloadStorageError.unavailable }
                 nativeDeletes = journal.owners; nativeDeleteRecords = journal.removed
             }
             let index = cache.appendingPathComponent("tasks.json")
