@@ -4,7 +4,7 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 ## 构建与验证状态
 
-**2026-11-14：云端检查已恢复，结果待定。** 普通队列原生传输、HTTP/HLS 共享限速及 HLS 分片摘要已补入源码。确认 GitHub 停用了 fork 的工作流后，重新启用仓库 Actions 并成功启动 [`0cf2180` 的检查](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43626154928)。以下 203 项和 IPA 仍只对应旧的成功提交，不能用于证明本批源码已通过。服务器没有执行编译、测试或验证脚本。
+**2026-11-14：普通签名包正在云端检查。** Actions 已恢复，普通队列原生传输、HTTP/HLS 共享限速及 HLS 分片摘要已通过 [`afd12ae` 的 206 项回归与打包](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43627053084)。针对用户确认的普通签名方式，正在运行 [`c48855d` 的重签包检查](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43629941255)。此前产物仍是旧式签名包，不用于普通签名交付。服务器没有执行编译、测试或验证脚本。
 
 最后完整成功的基线为 [`4870fec`](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43031952929)：203 项模拟器测试零失败、独立 Java 对 iOS 加密备份的反向解密、主应用与分享扩展设备编译及 IPA 打包成功。该轮 IPA 的 SHA-256 为 `e07f0a10e4218b657c297b8657f3234d3a818cf20e0233d5b839b11a4b6c285b`。包含 GitHub 原生入口、ZIP/点文件、普通媒体原生下载/校验桥、公开 HTTPS 降级防护，以及真实原生下载中的分片校验。
 
@@ -25,8 +25,8 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 工作流默认 `package_style=resign`，输出两种普通重签包；显式选 `trollstore` 或 `both` 才产生旧式安装包。iOS 更新检查按当前包的安装方式匹配资产，不把 TrollStore 包提供给普通签名用户。
 
 1. 打开上述 Actions 页面，选取 `ios-port` 分支的成功运行，核对提交号。
-2. 在 Artifacts 下载 `YunX-iOS17-TrollStore-dev`，解压得到 IPA 和 SHA-256 文件。下载 Actions 产物通常需要登录 GitHub。
-3. 将 IPA 分享给目标设备上的 TrollStore 安装。编译、签名结构和 ZIP 检查通过不等于已证明该设备能安装运行。
+2. 在 Artifacts 下载 `YunX-iOS-resign-dev`，解压得到两个可重签 IPA 及各自的 SHA-256 文件。下载 Actions 产物通常需要登录 GitHub。
+3. 先选择 `YunX-iOS-Resign.ipa` 交给自己的签名软件或服务，完成签名后安装到目标设备；工具支持扩展时可选择完整包。编译、签名结构和 ZIP 检查通过不等于已证明该设备能安装运行。
 
 工作流同时保存测试结果、构建日志、原生引擎对应源码和版本信息。失败时先查看出错步骤，再查看 `YunX-iOS-build-log` 等产物；不要把失败运行或旧提交的 IPA 当作最新交付。
 
@@ -83,4 +83,4 @@ GitHub 支持仓库/用户/组织、文件目录、Releases、README，以及含
 
 设置包含深浅主题/强调色、历史/收藏搜索与重用、用户授权后的完成通知，以及固定事件/数字字段的诊断日志。日志不包含原始链接、口令、请求头或未经处理的引擎错误，按 3×256KB 轮转并可过滤导出。
 
-更新只识别本仓库 `ios-vX.Y.Z` 正式版本及唯一官方 IPA，要求 SHA-256 和兼容的最低系统声明。自动检查默认关闭，启用后最多每六小时检查一次。用户导出并交给 TrollStore 安装；不会自动替换当前应用，也不会把 Windows 安装包当作 iOS 更新。
+更新只识别本仓库 `ios-vX.Y.Z` 正式版本及与当前安装方式匹配的唯一官方 IPA，要求 SHA-256 和兼容的最低系统声明。自动检查默认关闭，启用后最多每六小时检查一次。普通签名用户导出后交给签名软件或服务；不会自动替换当前应用，也不会把 Windows 或其他安装方式的包当作当前更新。
