@@ -142,6 +142,7 @@ struct CloudDownload {
     let filename: String
     let size: Int64
     let headers: [String: String]
+    var allowsBackground = true
 }
 
 struct CloudPage {

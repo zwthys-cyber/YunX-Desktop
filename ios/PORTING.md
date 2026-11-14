@@ -43,6 +43,8 @@
 
 用户已确认目标为 iPhone 17 Pro Max、iOS 27.0.1，并使用签名软件或服务安装可重签 IPA；交付不以 TrollStore 为前提。用户截图已显示应用可以启动并浏览百度分享，但个人网盘根目录出现错误 -6，分享页转存入口不可用；尚未完成真实账号下载、媒体及后台恢复验收。云端模拟器结果不能替代这台设备的实际验收。
 
+用户后续下载诊断显示百度任务仅收到 82 字节、平台文件约 910 KB，并以非成功 HTTP 状态失败；截图未提供具体状态码，不能确定拒绝原因。针对这一步新增：对明文候选按顺序进行单字节 Range 请求预检、失败后使用文件元数据取链并采用百度 SDK 的 `pan.baidu.com` 下载 UA、手动解析安全 HTTPS 跳转且不向 CDN 发送账号 Cookie、拒绝错误大小/范围及验证页面。普通队列的百度任务改用前台会话并持久化该选择，后台/前台失败均显示具体 HTTP 状态码。参考：[百度 SDK 下载实现](https://github.com/baidu-netdisk/baidu-drive-sdk-go/blob/v0.1.0/baidudriver/api/download_file.go)、[Apple 后台跳转限制](https://developer.apple.com/documentation/foundation/downloading-files-in-the-background)。新增 6 项候选回退、元数据 UA/跳转、HTTP 拒绝、错误响应、取消及队列诊断/前台选择持久化用例，待本次提交的云端结果和真实账号复测。
+
 百度问题修复已通过 [`c68dc3b` 云端检查](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43635552205)：217 项模拟器测试零失败，Java 反向备份、设备版主应用与扩展编译、普通重签 IPA 打包上传均成功。分享页增加账号选择、登录及管理入口，单个可用账号自动选中；切换账号重建客户端并保留分享路径。网页登录保存仅选取适用于百度网盘 API 的 Cookie，避免 Passport 或其他路径的同名凭证覆盖；个人接口拒绝登录时明确提示重新网页登录。新客户端进入深层分享目录时先取得根目录转存标识。新增 8 项账号选择、Cookie 作用域、登录拒绝及深层转存回归用例。以上结果尚不能说明真实账号故障已解决。
 
 [百度修复版普通重签产物](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43635552205/artifacts/14130279532)包含 `YunX-iOS-Resign.ipa`（推荐兼容包，SHA-256：`0e9910b3c326b04e9cbcdd50e8c4972f4798dbbe9f5fbe115157c1d2c3735e3f`）和 `YunX-iOS-Resign-Share.ipa`（完整分享包，SHA-256：`b4c261276279121e03705258f0e660660193558e74bb24cffb8c3b80018443a3`）。用户需重签安装后，在百度页面重新网页登录、选择已保存账号，再验证个人目录加载及分享转存后的下载；不要求向开发者提供 Cookie 或密码。普通包权限仍由用户实际签名配置决定。

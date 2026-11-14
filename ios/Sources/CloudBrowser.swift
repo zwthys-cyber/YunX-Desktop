@@ -237,7 +237,7 @@ final class CloudBrowserModel: ObservableObject {
             _ = try await NativeEngine.shared.createCloudHTTPS(plan, context: context)
             return true
         }
-        return downloads.add(result.url, filename: filename ?? result.filename, headers: result.headers, expectedSize: result.size)
+        return downloads.add(result.url, filename: filename ?? result.filename, headers: result.headers, expectedSize: result.size, allowsBackground: result.allowsBackground)
     }
     func downloadCurrentFolder(nativeConnections: Int? = nil) async {
         guard !busy, let folder = folders.last else { return }

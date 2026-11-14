@@ -38,6 +38,7 @@ struct DownloadItem: Codable, Identifiable {
     var pendingSave: Bool?
     var nativeTransfer: Bool?
     var nativeTaskID: String?
+    var foregroundOnly: Bool?
 }
 
 /// URLSession 的委托队列显式使用主队列；所有 UI 操作也在主线程执行。
@@ -154,7 +155,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     @discardableResult
     func add(_ url: URL, filename: String? = nil, headers: [String: String] = [:],
-             expectedSize: Int64? = nil, expectedMedia: String? = nil, originFallback: URL? = nil) -> Bool {
+             expectedSize: Int64? = nil, expectedMedia: String? = nil, originFallback: URL? = nil, allowsBackground: Bool = true) -> Bool {
         guard !unreadableIndex else { return false }
         guard !DownloadStorage.isMigrating else { storageError = DownloadStorageError.busy.localizedDescription; return false }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil, url.user == nil, url.password == nil else {
@@ -171,7 +172,8 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
         item.preserveFilename = filename != nil
         item.requiredSize = expectedSize
         item.expectedMedia = expectedMedia
-        item.backgroundTransfer = backgroundSession != nil && BackgroundDownloadPolicy.allows(url, headers: headers)
+        item.foregroundOnly = !allowsBackground
+        item.backgroundTransfer = allowsBackground && backgroundSession != nil && BackgroundDownloadPolicy.allows(url, headers: headers)
         if !headers.isEmpty {
             do { try DownloadHeaders.save(headers, id: item.id) }
             catch { storageError = error.localizedDescription; return false }
@@ -293,7 +295,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             nativeWork[id] = Task { @MainActor [self] in await runNative(item, headers: headers) }
             return
         }
-        let usesBackground = backgroundSession != nil && BackgroundDownloadPolicy.allows(items[index].url, headers: headers)
+        let usesBackground = items[index].foregroundOnly != true && backgroundSession != nil && BackgroundDownloadPolicy.allows(items[index].url, headers: headers)
         let targetSession = usesBackground ? backgroundSession! : session!
         let resume: Data?
         do { resume = try DownloadResumeVault.shared.read(from: resumeURL(id), id: id) }
@@ -651,7 +653,7 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             if queueRetry(index, status: status, retryAfter: (downloadTask.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")) { return }
             Task { await Diagnostics.shared.record(.downloadFailed, code: status) }
             items[index].state = .failed
-            items[index].error = "服务器未返回成功的 HTTP 状态"
+            items[index].error = status.map { "服务器拒绝下载（HTTP \($0)）。请重新解析下载地址后重试。" } ?? "服务器未返回有效的 HTTP 响应。"
             save()
             return
         }

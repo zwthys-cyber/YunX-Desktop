@@ -79,7 +79,7 @@ struct CloudTransferContext: Codable, Equatable {
                 try requireCurrentAccount()
                 var updated = self
                 updated.file = current
-                return (CloudDownload(url: plan.url, filename: filename, size: plan.size, headers: plan.headers), updated)
+                return (CloudDownload(url: plan.url, filename: filename, size: plan.size, headers: plan.headers, allowsBackground: plan.allowsBackground), updated)
             }
             let fresh = result.files.filter { visited.insert($0.id).inserted }
             guard !result.hasMore || !fresh.isEmpty else { throw CloudError.message("平台分页重复，已停止刷新直链。") }

@@ -125,6 +125,12 @@ final class BaiduTests: XCTestCase {
     }
     func testDownloadSkipsEncryptedCandidateAndDoesNotForwardCookie() async throws {
         MediaMockProtocol.handler = { request in
+            if request.url?.host == "cdn.example.test" {
+                XCTAssertEqual(request.url?.path, "/plain")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+                XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+                return (206, ["Content-Range": "bytes 0-0/10", "Content-Type": "application/octet-stream"], [:])
+            }
             if request.url?.host == "d.pcs.baidu.com" {
                 XCTAssertEqual(Self.query(request)["path"], "/fixture.bin")
                 return (200, [:], ["errno": 0, "urls": [["url": "https://cdn.example.test/encrypted", "encrypt": 1, "rank": 1], ["url": "https://cdn.example.test/plain", "encrypt": 0, "rank": 2]]])
@@ -136,6 +142,7 @@ final class BaiduTests: XCTestCase {
         let client = client(), files = try await client.list(share: nil)
         let plan = try await client.download(file: XCTUnwrap(files.first), share: nil)
         XCTAssertEqual(plan.url.path, "/plain"); XCTAssertNil(plan.headers["Cookie"]); XCTAssertNil(plan.headers["Authorization"])
+        XCTAssertFalse(plan.allowsBackground)
     }
     func testFolderTransferUsesFSIDAndRenameJSONCannotBeInjected() async throws {
         MediaMockProtocol.handler = { request in
@@ -161,6 +168,97 @@ final class BaiduTests: XCTestCase {
         try await client.mutate(.save(file: folder, share: share, parent: "/target"))
         try await client.mutate(.rename(file: folder, name: "quoted\"name"))
         do { try await client.mutate(.move(file: folder, parent: "/folder/child")); XCTFail("Self descendant move must fail") } catch { }
+    }
+    func testRejectedFirstCDNFallsBackToNextWithoutSendingAccountCookie() async throws {
+        let probes = BaiduCounter()
+        MediaMockProtocol.handler = { request in
+            switch request.url?.host {
+            case "d.pcs.baidu.com": return (200, [:], ["errno": 0, "urls": [["url": "https://cdn.example.test/rejected", "encrypt": 0, "rank": 1], ["url": "https://cdn.example.test/working", "encrypt": 0, "rank": 2]]])
+            case "cdn.example.test":
+                _ = probes.next()
+                XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+                if request.url?.path == "/rejected" { return (403, ["Content-Length": "82"], ["error": "rejected"]) }
+                return (206, ["Content-Range": "bytes 0-0/10"], [:])
+            default: return (200, [:], ["errno": 0, "result": ["bdstoken": "fixture"], "list": [Self.row(path: "/fixture.bin", folder: false)]])
+            }
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = client(), files = try await client.list(share: nil)
+        let plan = try await client.download(file: XCTUnwrap(files.first), share: nil)
+        XCTAssertEqual(plan.url.path, "/working"); XCTAssertEqual(probes.count, 2)
+    }
+    func testMetadataFallbackUsesBaiduDownloadUAAndResolvesHTTPSRedirect() async throws {
+        MediaMockProtocol.handler = { request in
+            if ["cdn.example.test", "other.example.test"].contains(request.url?.host ?? "") {
+                XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"), "CDN must not receive account credentials")
+            }
+            switch request.url?.host {
+            case "d.pcs.baidu.com": return (200, [:], ["errno": 0, "urls": []])
+            case "cdn.example.test":
+                XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "pan.baidu.com")
+                return (302, ["Location": "https://other.example.test/final"], [:])
+            case "other.example.test":
+                XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "pan.baidu.com")
+                return (206, ["Content-Range": "bytes 0-0/10"], [:])
+            default:
+                if request.url?.path == "/api/filemetas" { return (200, [:], ["errno": 0, "info": [["dlink": "https://cdn.example.test/start"]]]) }
+                return (200, [:], ["errno": 0, "result": ["bdstoken": "fixture"], "list": [Self.row(path: "/fixture.bin", folder: false)]])
+            }
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = client(), files = try await client.list(share: nil)
+        let plan = try await client.download(file: XCTUnwrap(files.first), share: nil)
+        XCTAssertEqual(plan.url.host, "other.example.test")
+        XCTAssertFalse(plan.allowsBackground)
+        XCTAssertNil(plan.headers["Range"])
+    }
+    func testAllDeniedLinksFailBeforeCreatingDownloadPlan() async throws {
+        MediaMockProtocol.handler = { request in
+            if request.url?.host == "cdn.example.test" { return (403, ["Content-Length": "82"], ["error": "rejected"]) }
+            if request.url?.host == "d.pcs.baidu.com" { return (200, [:], ["errno": 0, "urls": [["url": "https://cdn.example.test/denied", "encrypt": 0]]]) }
+            if request.url?.path == "/api/filemetas" { return (200, [:], ["errno": 0, "info": [["dlink": "https://cdn.example.test/also-denied"]]]) }
+            return (200, [:], ["errno": 0, "result": ["bdstoken": "fixture"], "list": [Self.row(path: "/fixture.bin", folder: false)]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = client(), files = try await client.list(share: nil)
+        do { _ = try await client.download(file: XCTUnwrap(files.first), share: nil); XCTFail("Must not queue a rejected address") }
+        catch {
+            XCTAssertTrue(error.localizedDescription.contains("HTTP 403"))
+            XCTAssertTrue(error.localizedDescription.contains("未创建下载任务"))
+            XCTAssertFalse(error.localizedDescription.contains("https://"))
+        }
+    }
+    func testPreflightRejectsWrongSizeRangeAndUnsafeRedirects() async throws {
+        for mode in ["size", "range", "redirect"] {
+            MediaMockProtocol.handler = { request in
+                XCTAssertEqual(request.url?.scheme, "https")
+                if request.url?.host == "cdn.example.test" {
+                    if mode == "size" { return (200, ["Content-Length": "82"], [:]) }
+                    if mode == "range" { return (206, ["Content-Range": "bytes 0-0/82"], [:]) }
+                    return (302, ["Location": "http://unsafe.example.test/private"], [:])
+                }
+                if request.url?.host == "d.pcs.baidu.com" { return (200, [:], ["errno": 0, "urls": [["url": "https://cdn.example.test/download", "encrypt": 0]]]) }
+                if request.url?.path == "/api/filemetas" { return (200, [:], ["errno": 0, "info": [["dlink": "https://cdn.example.test/fallback"]]]) }
+                return (200, [:], ["errno": 0, "result": ["bdstoken": "fixture"], "list": [Self.row(path: "/fixture.bin", folder: false)]])
+            }
+            defer { MediaMockProtocol.handler = nil }
+            let client = client(), files = try await client.list(share: nil)
+            do { _ = try await client.download(file: XCTUnwrap(files.first), share: nil); XCTFail("Invalid response must be rejected: " + mode) }
+            catch { XCTAssertTrue(error.localizedDescription.contains("未创建下载任务")) }
+        }
+    }
+    func testCancelledProbeDoesNotRequestMetadataFallback() async throws {
+        MediaMockProtocol.handler = { request in
+            if request.url?.host == "cdn.example.test" { throw URLError(.cancelled) }
+            if request.url?.host == "d.pcs.baidu.com" { return (200, [:], ["errno": 0, "urls": [["url": "https://cdn.example.test/download", "encrypt": 0]]]) }
+            XCTAssertNotEqual(request.url?.path, "/api/filemetas")
+            return (200, [:], ["errno": 0, "result": ["bdstoken": "fixture"], "list": [Self.row(path: "/fixture.bin", folder: false)]])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = client(), files = try await client.list(share: nil)
+        do { _ = try await client.download(file: XCTUnwrap(files.first), share: nil); XCTFail("Cancellation must propagate") }
+        catch { XCTAssertTrue(error is CancellationError) }
     }
     func testInvalidPasscodeIsNotReportedAsEmptyDirectory() async throws {
         MediaMockProtocol.handler = { _ in (200, [:], ["errno": -9]) }

@@ -31,4 +31,25 @@ final class BackgroundDownloadTests: XCTestCase {
         await fulfillment(of: [drained], timeout: 2)
         XCTAssertEqual(calls, 2)
     }
+    func testRejectedTransferReportsHTTPStatusAndPersistsForegroundOnly() async throws {
+        let fixture = try NativeHTTPFixture(data: Data(repeating: 0x41, count: 10), requiredHeader: "X-Fixture-Required: missing")
+        let url = try await fixture.start()
+        defer { fixture.stop() }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DownloadStore(root: root.appendingPathComponent("Downloads"), cache: root.appendingPathComponent("Support"), configuration: .ephemeral)
+        XCTAssertTrue(store.add(url, filename: "fixture.bin", expectedSize: 10, allowsBackground: false))
+        let id = try XCTUnwrap(store.items.first?.id)
+        defer { store.delete(id) }
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, store.items.first?.state != .failed { try await Task.sleep(for: .milliseconds(50)) }
+        let item = try XCTUnwrap(store.items.first)
+        XCTAssertEqual(item.state, .failed)
+        XCTAssertTrue(item.error?.contains("HTTP 401") == true)
+        XCTAssertEqual(item.foregroundOnly, true)
+        XCTAssertEqual(item.backgroundTransfer, false)
+        XCTAssertNil(store.fileURL(item))
+        let restored = DownloadStore(root: root.appendingPathComponent("Downloads"), cache: root.appendingPathComponent("Support"), configuration: .ephemeral)
+        XCTAssertEqual(restored.items.first?.foregroundOnly, true)
+    }
 }

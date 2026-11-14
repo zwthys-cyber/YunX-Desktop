@@ -98,23 +98,84 @@ final class BaiduClient {
         guard !file.isDirectory else { throw CloudError.message("请先进入文件夹。") }
         try requireAccount()
         let metadata = try Self.metadata(file)
-        let url: URL
-        do { url = try await locate(metadata.path) }
-        catch {
-            if Task.isCancelled { throw CancellationError() }
+        var lastFailure: Error?
+        do {
+            for url in try await locate(metadata.path) {
+                do { return try await probe(url, file: file, agent: Self.downloadAgent) }
+                catch { try Self.propagateCancellation(error); lastFailure = error }
+            }
+        }
+        catch { try Self.propagateCancellation(error); lastFailure = error }
+        do {
             let root = try await request("/api/filemetas", query: ["dlink": "1", "fsids": try Self.json([metadata.id])], needsToken: true, readOnly: true)
             guard let first = (root["info"] as? [[String: Any]])?.first, let direct = Self.safeURL(Self.string(first["dlink"])) else { throw CloudError.message("百度没有提供可用的明文 HTTPS 下载地址。") }
-            url = direct
+            // The official Baidu SDK uses this UA for metadata dlinks, rather
+            // than the Android UA used by locatedownload.
+            return try await probe(direct, file: file, agent: "pan.baidu.com")
         }
-        return CloudDownload(url: url, filename: file.name, size: file.size, headers: ["User-Agent": Self.downloadAgent, "Referer": "https://pan.baidu.com/"])
+        catch {
+            try Self.propagateCancellation(error)
+            let detail = ((lastFailure as? CloudError)?.localizedDescription ?? "") + ((error as? CloudError)?.localizedDescription ?? "网络请求失败。")
+            throw CloudError.message("百度下载地址未通过预检，未创建下载任务。" + detail + " 请重新解析；若持续失败，请在百度官网确认该文件可下载。")
+        }
     }
-    private func locate(_ path: String) async throws -> URL {
+    private static func propagateCancellation(_ error: Error) throws {
+        try Task.checkCancellation()
+        if error is CancellationError || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+    }
+    private func probe(_ original: URL, file: CloudFile, agent: String) async throws -> CloudDownload {
+        var url = original
+        let headers = ["User-Agent": agent, "Referer": "https://pan.baidu.com/", "Accept-Encoding": "identity"]
+        var visited = Set<URL>()
+        for _ in 0..<8 {
+            try Task.checkCancellation()
+            guard visited.insert(url).inserted else { throw CloudError.message("百度下载地址发生循环跳转。") }
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+            headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+            request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
+            // Use the no-redirect API session and cancel as soon as headers
+            // arrive. Never read or retain the complete file during preflight.
+            let (bytes, response) = try await session.bytes(for: request)
+            bytes.task.cancel()
+            guard let http = response as? HTTPURLResponse else { throw CloudError.message("百度下载响应无效。") }
+            if [301, 302, 303, 307, 308].contains(http.statusCode) {
+                guard let location = http.value(forHTTPHeaderField: "Location"),
+                      let target = URL(string: location, relativeTo: url)?.absoluteURL,
+                      Self.safeURL(target.absoluteString) != nil else { throw CloudError.message("百度下载跳转不是安全的 HTTPS 地址。") }
+                url = target
+                continue
+            }
+            if http.statusCode == 416, file.size == 0, http.value(forHTTPHeaderField: "Content-Range") == "bytes */0" {
+                return CloudDownload(url: url, filename: file.name, size: 0, headers: headers, allowsBackground: false)
+            }
+            guard http.statusCode == 200 || http.statusCode == 206 else {
+                throw CloudError.message("服务器拒绝下载（HTTP \(http.statusCode)）。")
+            }
+            if http.statusCode == 206 {
+                let range = http.value(forHTTPHeaderField: "Content-Range") ?? ""
+                let parts = range.split(separator: "/", omittingEmptySubsequences: false)
+                guard parts.count == 2, parts[0] == "bytes 0-0", let total = Int64(parts[1]),
+                      total > 0, file.size == 0 || total == file.size else { throw CloudError.message("百度下载响应的文件范围与平台记录不一致。") }
+            } else if file.size > 0, http.expectedContentLength >= 0, http.expectedContentLength != file.size {
+                throw CloudError.message("百度下载响应大小与平台记录不一致，可能返回了错误页面。")
+            }
+            let mime = http.mimeType?.lowercased() ?? ""
+            let ext = (file.name as NSString).pathExtension.lowercased()
+            guard !(mime == "text/html" && !["html", "htm"].contains(ext)),
+                  !(mime == "application/json" && ext != "json") else { throw CloudError.message("百度返回验证页面或错误数据，未返回所选文件。") }
+            return CloudDownload(url: url, filename: file.name, size: file.size, headers: headers, allowsBackground: false)
+        }
+        throw CloudError.message("百度下载跳转次数过多。")
+    }
+    private func locate(_ path: String) async throws -> [URL] {
         let parameters = ["method": "locatedownload", "path": path, "app_id": "250528", "clienttype": "17", "ver": "4.0", "ant": "1", "check_blue": "1", "es": "1", "esl": "1", "apn_id": "1_-1", "freeisp": "0", "queryfree": "0", "use": "1", "dtype": "1", "eck": "1", "ehps": "1", "err_ver": "1.0", "network_type": "WIFI", "channel": "0", "time": String(Int64(Date().timeIntervalSince1970)),
                           "rand": "5ed606e9da222cde0474cdf70eda884b", "devuid": "0F1E9FC2E084472DA5A61C4CF4C759AF", "cuid": "0F1E9FC2E084472DA5A61C4CF4C759AF", "deviceid": "348642637967375013", "psign": "860a071f77c860e8cea06e4e54c518f3", "version": "2.2.111.34", "version_app": "12.24.6", "vip": "0"]
         let root = try await request("/rest/2.0/pcs/file", host: "d.pcs.baidu.com", query: parameters, body: Data("0".utf8), agent: Self.downloadAgent, common: false, readOnly: true)
         let candidates = (root["urls"] as? [[String: Any]] ?? []).filter { Self.string($0["encrypt"]) == "0" }.sorted { (Int(Self.string($0["rank"])) ?? Int.max) < (Int(Self.string($1["rank"])) ?? Int.max) }
-        guard let url = candidates.compactMap({ Self.safeURL(Self.string($0["url"])) }).first else { throw CloudError.message("百度只返回加密或不安全通道，已停止直接下载。") }
-        return url
+        var seen = Set<URL>()
+        let urls = candidates.compactMap({ Self.safeURL(Self.string($0["url"])) }).filter { seen.insert($0).inserted }.prefix(8)
+        guard !urls.isEmpty else { throw CloudError.message("百度只返回加密或不安全通道，已停止直接下载。") }
+        return Array(urls)
     }
     func mutate(_ operation: CloudMutation) async throws {
         try requireAccount()
