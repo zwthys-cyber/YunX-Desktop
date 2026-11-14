@@ -6,6 +6,16 @@ struct CloudRoute: Identifiable {
     let provider: CloudProvider
     let account: SavedCredential?
     let share: CloudShare?
+    var initialFolders: [CloudBrowserModel.Folder]? = nil
+}
+
+enum CloudAccountSelection {
+    static func automatic(_ accounts: [SavedCredential], provider: CloudProvider) -> SavedCredential? {
+        let available = accounts.filter { $0.platform == provider.rawValue && !$0.secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let primary = available.filter { $0.isPrimary == true }
+        if primary.count == 1 { return primary.first }
+        return primary.isEmpty && available.count == 1 ? available.first : nil
+    }
 }
 
 @MainActor
@@ -36,7 +46,7 @@ struct CloudHomeScreen: View {
                 Section("平台与账号") {
                     Picker("平台", selection: $provider) {
                         ForEach(CloudProvider.allCases) { Text($0.rawValue).tag($0) }
-                    }.onChange(of: provider) { _, _ in choseAccount = false; accountID = accounts.first(where: { $0.isPrimary == true })?.id }
+                    }.onChange(of: provider) { _, _ in choseAccount = false; accountID = CloudAccountSelection.automatic(vault.accounts, provider: provider)?.id }
                     Picker("账号", selection: Binding(get: { accountID }, set: { accountID = $0; choseAccount = true })) {
                         Text("游客").tag(Optional<UUID>.none)
                         ForEach(accounts) { account in
@@ -89,11 +99,14 @@ struct CloudHomeScreen: View {
                 }
                 .onReceive(vault.$accounts) { values in
                     if let id = accountID, !values.contains(where: { $0.id == id && $0.platform == provider.rawValue }) { accountID = nil; choseAccount = true }
+                    else if accountID == nil && !choseAccount { accountID = CloudAccountSelection.automatic(values, provider: provider)?.id }
                 }
-                .onAppear { if !choseAccount { accountID = accounts.first(where: { $0.isPrimary == true })?.id } }
+                .onAppear { if !choseAccount { accountID = CloudAccountSelection.automatic(vault.accounts, provider: provider)?.id } }
                 .onDisappear { commandTask?.cancel() }
                 .sheet(item: $route) { item in
-                    CloudBrowserScreen(route: item, vault: vault, downloads: downloads)
+                    CloudBrowserScreen(route: item, vault: vault, downloads: downloads) { selected in
+                        if provider == item.provider { accountID = selected?.id; choseAccount = true }
+                    }
                 }
         }
     }
@@ -110,7 +123,7 @@ struct CloudHomeScreen: View {
             if provider != share.provider {
                 provider = share.provider
                 choseAccount = false
-                accountID = vault.accounts.first { $0.platform == share.provider.rawValue && $0.isPrimary == true }?.id
+                accountID = CloudAccountSelection.automatic(vault.accounts, provider: share.provider)?.id
             }
             open(share)
         } catch { if !Task.isCancelled { self.error = "口令解析失败。请检查网络、稍后重试或粘贴原始分享链接。" } }
@@ -161,6 +174,7 @@ final class CloudBrowserModel: ObservableObject {
                              cookieChanged: { [weak vault] new in
             if let id = route.account?.id { vault?.updateSecret(id, secret: new) }
         })
+        if route.share != nil, let path = route.initialFolders, path.first?.id == "0", path.count <= 101 { folders = path }
     }
 
     func reload() async { await load(path: folders, nextPage: 1) }
@@ -278,6 +292,25 @@ final class CloudBrowserModel: ObservableObject {
 
 @MainActor
 struct CloudBrowserScreen: View {
+    @State private var selectedRoute: CloudRoute
+    @ObservedObject private var vault: CredentialVault
+    private let downloads: DownloadStore
+    private let accountChanged: (SavedCredential?) -> Void
+    init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore, accountChanged: @escaping (SavedCredential?) -> Void = { _ in }) {
+        _selectedRoute = State(initialValue: route)
+        self.vault = vault; self.downloads = downloads; self.accountChanged = accountChanged
+    }
+    var body: some View {
+        CloudBrowserContents(route: selectedRoute, vault: vault, downloads: downloads) { account, path in
+            selectedRoute = CloudRoute(provider: selectedRoute.provider, account: account, share: selectedRoute.share,
+                initialFolders: selectedRoute.share == nil ? nil : path)
+            accountChanged(account)
+        }.id(selectedRoute.id)
+    }
+}
+
+@MainActor
+private struct CloudBrowserContents: View {
     let route: CloudRoute
     @StateObject private var model: CloudBrowserModel
     @State private var action: Task<Void, Never>?
@@ -291,12 +324,18 @@ struct CloudBrowserScreen: View {
     @State private var nativeFile: CloudFile?
     @AppStorage("cloudNativeHTTP") private var nativeHTTP = false
     @AppStorage private var nativeConnections: Int
-    private let vault: CredentialVault
+    @ObservedObject private var vault: CredentialVault
+    private let selectAccount: (SavedCredential?, [CloudBrowserModel.Folder]) -> Void
+    @State private var showAccounts = false
+    @State private var showLogin = false
+    @State private var chooseAccount = false
+    @State private var accountsBeforeLogin = Set<UUID>()
     @Environment(\.dismiss) private var dismiss
 
-    init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore) {
+    init(route: CloudRoute, vault: CredentialVault, downloads: DownloadStore, selectAccount: @escaping (SavedCredential?, [CloudBrowserModel.Folder]) -> Void) {
         self.route = route
         self.vault = vault
+        self.selectAccount = selectAccount
         _nativeConnections = AppStorage(wrappedValue: 4, "cloudHTTPConnections." + route.provider.rawValue)
         _model = StateObject(wrappedValue: CloudBrowserModel(route: route, vault: vault, downloads: downloads))
     }
@@ -304,6 +343,26 @@ struct CloudBrowserScreen: View {
     var body: some View {
         NavigationStack {
             List {
+                Section(route.share == nil ? "网盘账号" : "分享操作账号") {
+                    Picker("账号", selection: Binding(get: { route.account?.id }, set: { id in
+                        selectAccount(availableAccounts.first { $0.id == id }, model.folders)
+                    })) {
+                        Text("游客（仅浏览分享）").tag(Optional<UUID>.none)
+                        ForEach(availableAccounts) { account in
+                            Text(account.remark.isEmpty ? "已保存账号" : account.remark).tag(Optional(account.id))
+                        }
+                        if let id = route.account?.id, currentAccount == nil { Text("账号已移除或凭证为空").tag(Optional(id)) }
+                    }.disabled(model.busy)
+                    if currentAccount == nil {
+                        Text("尚未选择可用账号。游客可查看分享文件；转存和个人网盘下载需要登录并选择账号。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Button("选择账号或登录") { requestAccount() }.disabled(model.busy)
+                    }
+                    if route.provider.supportsWebCookieLogin {
+                        Button(currentAccount == nil ? "登录\(route.provider.rawValue)" : "重新登录\(route.provider.rawValue)") { beginLogin() }.disabled(model.busy)
+                    }
+                    Button("管理账号") { accountsBeforeLogin = Set(availableAccounts.map(\.id)); showAccounts = true }.disabled(model.busy)
+                }
                 Section("文件传输") {
                     Toggle("原生多连接（前台）", isOn: $nativeHTTP)
                     if nativeHTTP {
@@ -356,7 +415,9 @@ struct CloudBrowserScreen: View {
                                     .buttonStyle(.bordered).disabled(model.busy)
                             } else {
                                 if [CloudProvider.xunlei, .baidu].contains(route.provider), route.share != nil {
-                                    Button("转存") { destinationFile = file }.buttonStyle(.bordered).disabled(model.busy || route.account == nil)
+                                    Button(currentAccount == nil ? "选择账号" : "转存") {
+                                        if currentAccount == nil { requestAccount() } else { destinationFile = file }
+                                    }.buttonStyle(.bordered).disabled(model.busy)
                                 } else if route.provider == .lanzou, route.share == nil {
                                     Button("生成分享并下载") { shareDownloadFile = file }.buttonStyle(.bordered).disabled(model.busy)
                                 } else {
@@ -414,9 +475,38 @@ struct CloudBrowserScreen: View {
                     action = Task { await model.manage(operation) }
                 }
             }
+            .sheet(isPresented: $showAccounts, onDismiss: accountLoginFinished) { AccountScreen(vault: vault, modal: true) }
+            .sheet(isPresented: $showLogin, onDismiss: accountLoginFinished) { CloudWebLogin(provider: route.provider, vault: vault) }
+            .confirmationDialog("选择\(route.provider.rawValue)账号", isPresented: $chooseAccount, titleVisibility: .visible) {
+                ForEach(availableAccounts) { account in
+                    Button(account.remark.isEmpty ? "已保存账号" : account.remark) { selectAccount(account, model.folders) }
+                }
+                if route.provider.supportsWebCookieLogin { Button("登录新账号") { beginLogin() } }
+                Button("取消", role: .cancel) { }
+            }
             .confirmationDialog("将递归加入当前目录下的文件，最多 500 个文件、100 个目录。子目录名称合并到文件名，不创建目录树。", isPresented: $confirmBatch, titleVisibility: .visible) {
                 Button("开始批量下载") { action = Task { await model.downloadCurrentFolder(nativeConnections: nativeHTTP ? nativeConnections : nil) } }
             } message: { Text(connectionNotice) }
+        }
+    }
+    private var availableAccounts: [SavedCredential] {
+        vault.accounts.filter { $0.platform == route.provider.rawValue && !$0.secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+    private var currentAccount: SavedCredential? { availableAccounts.first { $0.id == route.account?.id } }
+    private func requestAccount() {
+        if availableAccounts.isEmpty { beginLogin() } else { chooseAccount = true }
+    }
+    private func beginLogin() {
+        accountsBeforeLogin = Set(availableAccounts.map(\.id))
+        if route.provider.supportsWebCookieLogin { showLogin = true } else { showAccounts = true }
+    }
+    private func accountLoginFinished() {
+        let added = availableAccounts.filter { !accountsBeforeLogin.contains($0.id) }
+        if added.count == 1 { selectAccount(added.first, model.folders) }
+        else if let currentAccount, currentAccount.secret != route.account?.secret || currentAccount.backupFields != route.account?.backupFields {
+            selectAccount(currentAccount, model.folders)
+        } else if route.account == nil, let automatic = CloudAccountSelection.automatic(availableAccounts, provider: route.provider) {
+            selectAccount(automatic, model.folders)
         }
     }
     private var connectionNotice: String {

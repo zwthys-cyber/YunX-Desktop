@@ -179,6 +179,8 @@ struct DownloadScreen: View {
 @MainActor
 struct AccountScreen: View {
     @ObservedObject var vault: CredentialVault
+    var modal = false
+    @Environment(\.dismiss) private var dismiss
     @State private var platform = "夸克"
     @State private var remark = ""
     @State private var secret = ""
@@ -253,6 +255,7 @@ struct AccountScreen: View {
                     }
                 }
             }.navigationTitle("账号")
+                .toolbar { if modal { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } } }
                 .sheet(item: $editingCredential) { CredentialEditScreen(account: $0, vault: vault) }
                 .sheet(isPresented: $pan123Login) { Pan123LoginScreen(vault: vault) }
                 .sheet(isPresented: $guangyaLogin) { GuangYaLoginScreen(vault: vault) }

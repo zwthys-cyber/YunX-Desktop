@@ -5,7 +5,7 @@ import Foundation
 @MainActor
 final class BaiduClient {
     private struct Metadata: Codable { let id: String; let path: String }
-    private struct ShareSession { let sekey: String; var id = ""; var uk = "" }
+    private struct ShareSession { let sekey: String; var id = ""; var uk = ""; var rootListed = false }
     private let session: URLSession
     private(set) var cookie: String
     private let changed: ((String) -> Void)?
@@ -59,6 +59,11 @@ final class BaiduClient {
     func list(share: CloudShare?, parent: String, page: Int) async throws -> [CloudFile] {
         guard (1...200).contains(page) else { throw CloudError.message("百度分页参数无效。") }
         let parent = try Self.path(Self.folder(parent))
+        if let share, parent != "/", shares[shareKey(share)]?.rootListed != true {
+            // Account changes can reopen a deep shared directory with a fresh
+            // client. Obtain its transfer identifiers before listing children.
+            _ = try await list(share: share, parent: "/", page: 1)
+        }
         let key = pageKey(share, parent)
         if page == 1 { morePages[key] = [:] }
         let root: [String: Any]
@@ -69,8 +74,10 @@ final class BaiduClient {
             if !info.sekey.isEmpty { query["sekey"] = info.sekey.removingPercentEncoding ?? info.sekey }
             root = try await request("/rest/2.0/xpan/share", query: query, sekey: info.sekey, common: false, readOnly: true)
             var updated = info
-            updated.id = Self.string(root["share_id"]); updated.uk = Self.string(root["uk"])
-            if !updated.id.isEmpty, !updated.uk.isEmpty { shares[shareKey(share)] = updated }
+            let id = Self.string(root["share_id"]), uk = Self.string(root["uk"])
+            if !id.isEmpty { updated.id = id }; if !uk.isEmpty { updated.uk = uk }
+            if parent == "/" { updated.rootListed = true }
+            shares[shareKey(share)] = updated
         } else {
             root = try await request("/api/list", query: ["channel": "chunlei", "showempty": "0", "order": "time", "desc": "1", "dir": parent, "num": "100", "page": String(page)], needsToken: true, readOnly: true)
         }
@@ -184,6 +191,10 @@ final class BaiduClient {
             let root = try await send(request)
             let errno = Int(Self.string(root["errno"]))
             if errno == -6, needsToken, attempt == 0 { continue }
+            if errno == -6, needsToken || path == "/api/gettemplatevariable" {
+                bdstoken = nil
+                throw CloudError.message("百度未接受当前账号的登录状态（错误码 -6）。请重新网页登录并保存账号，再重试个人网盘。")
+            }
             if errno == 8888, readOnly, attempt < 2 { try await Task.sleep(for: .seconds(2)); continue }
             guard errno == 0 else { throw CloudError.message("百度拒绝请求（错误码 \(errno ?? -1)），请确认登录、提取码、路径或访问限制。") }
             return root
@@ -201,7 +212,7 @@ final class BaiduClient {
             if let url = http.url {
                 let headers = http.allHeaderFields.reduce(into: [String: String]()) { result, item in if let key = item.key as? String { result[key] = String(describing: item.value) } }
                 var values = Self.cookies(cookie)
-                for received in HTTPCookie.cookies(withResponseHeaderFields: headers, for: url) where ["BDUSS", "BDUSS_BFESS", "STOKEN", "BAIDUID", "PTOKEN"].contains(received.name) {
+                for received in HTTPCookie.cookies(withResponseHeaderFields: headers, for: url) where BaiduCookiePolicy.matchesPanScope(received) {
                     if let expiry = received.expiresDate, expiry <= Date() { values.removeValue(forKey: received.name) } else { values[received.name] = received.value }
                 }
                 let merged = values.sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }.joined(separator: "; ")

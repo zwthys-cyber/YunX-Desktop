@@ -81,6 +81,48 @@ final class BaiduTests: XCTestCase {
         _ = try await client().listPage(share: nil, page: 2)
         XCTAssertEqual(profiles.count, 2); XCTAssertEqual(lists.count, 2)
     }
+    func testRejectedPersonalLoginOffersReloginWithoutPasscodeAdvice() async throws {
+        let requests = BaiduCounter()
+        MediaMockProtocol.handler = { request in
+            _ = requests.next()
+            XCTAssertEqual(request.url?.path, "/api/gettemplatevariable")
+            return (200, [:], ["errno": -6])
+        }
+        defer { MediaMockProtocol.handler = nil }
+        do {
+            _ = try await client().listPage(share: nil)
+            XCTFail("Rejected login must not appear as an empty directory")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("重新网页登录"))
+            XCTAssertTrue(error.localizedDescription.contains("-6"))
+            XCTAssertFalse(error.localizedDescription.contains("提取码"))
+        }
+        XCTAssertEqual(requests.count, 1)
+    }
+    func testFreshClientPrimesShareRootBeforeDeepFolderTransfer() async throws {
+        let roots = BaiduCounter()
+        MediaMockProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/gettemplatevariable": return (200, [:], ["errno": 0, "result": ["bdstoken": "fixture"]])
+            case "/share/transfer":
+                XCTAssertEqual(Self.query(request)["shareid"], "7")
+                XCTAssertEqual(Self.query(request)["from"], "8")
+                XCTAssertEqual(Self.form(request)["fsidlist"], "[\"42\"]")
+                return (200, [:], ["errno": 0, "extra": ["list": [["to_fs_id": 99]]]])
+            default:
+                if Self.query(request)["dir"] == "/" {
+                    _ = roots.next()
+                    return (200, [:], ["errno": 0, "share_id": 7, "uk": 8, "list": [Self.row()]])
+                }
+                return (200, [:], ["errno": 0, "list": [Self.row(path: "/folder/fixture.bin", folder: false)]])
+            }
+        }
+        defer { MediaMockProtocol.handler = nil }
+        let client = client(), share = CloudShare(provider: .baidu, shareID: "1share", passcode: "")
+        let files = try await client.list(share: share, parentID: "/folder")
+        try await client.mutate(.save(file: XCTUnwrap(files.first), share: share, parent: "/target"))
+        XCTAssertEqual(roots.count, 1)
+    }
     func testDownloadSkipsEncryptedCandidateAndDoesNotForwardCookie() async throws {
         MediaMockProtocol.handler = { request in
             if request.url?.host == "d.pcs.baidu.com" {

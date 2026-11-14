@@ -57,6 +57,7 @@ struct CloudWebLogin: View {
                   cookie.expiresDate == nil || cookie.expiresDate! > Date() else { continue }
             values[cookie.name] = cookie.value
         }
+        if provider == .baidu { values = BaiduCookiePolicy.loginValues(cookies) }
         let secret = values.keys.sorted().map { "\($0)=\(values[$0]!)" }.joined(separator: "; ")
         guard !secret.isEmpty else { state.failure = "尚未取得登录 Cookie，请先完成登录。"; return }
         do {
