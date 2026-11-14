@@ -4,7 +4,7 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 
 ## 构建与验证状态
 
-**2026-11-12：最新源码尚未验证。** 普通队列原生传输、HTTP/HLS 共享限速及 HLS 分片摘要已补入源码；GitHub 拒绝启动工作流，返回 `HTTP 422: Actions has been disabled for this repository`，重新启用工作流仍未恢复。请以 [验收表](PORTING.md) 的执行阻塞记录为准；以下 203 项和 IPA 只对应旧的成功提交，不能用于证明本批源码已通过。服务器没有执行编译、测试或验证脚本。
+**2026-11-14：云端检查已恢复，结果待定。** 普通队列原生传输、HTTP/HLS 共享限速及 HLS 分片摘要已补入源码。确认 GitHub 停用了 fork 的工作流后，重新启用仓库 Actions 并成功启动 [`0cf2180` 的检查](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43626154928)。以下 203 项和 IPA 仍只对应旧的成功提交，不能用于证明本批源码已通过。服务器没有执行编译、测试或验证脚本。
 
 最后完整成功的基线为 [`4870fec`](https://github.com/zwthys-cyber/YunX-Desktop/actions/runs/43031952929)：203 项模拟器测试零失败、独立 Java 对 iOS 加密备份的反向解密、主应用与分享扩展设备编译及 IPA 打包成功。该轮 IPA 的 SHA-256 为 `e07f0a10e4218b657c297b8657f3234d3a818cf20e0233d5b839b11a4b6c285b`。包含 GitHub 原生入口、ZIP/点文件、普通媒体原生下载/校验桥、公开 HTTPS 降级防护，以及真实原生下载中的分片校验。
 
