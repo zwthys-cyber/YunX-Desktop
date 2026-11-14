@@ -1,6 +1,6 @@
 # YunX iOS（开发中）
 
-SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm64，面向用户已有的 TrollStore 环境。完整交付以 [移植验收表](PORTING.md) 为准，目前尚未达到最终验收。
+SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm64。当前交付目标为用户提供的 iPhone 17 Pro Max、iOS 27.0.1，IPA 交由用户的签名软件或服务重签安装。提供普通重签包，TrollStore 打包为可选方式。完整交付以 [移植验收表](PORTING.md) 为准，目前尚未达到最终设备验收。
 
 ## 构建与验证状态
 
@@ -13,6 +13,16 @@ SwiftUI 原生应用，最低 iOS 17.0，支持 iPhone / iPad；设备版为 arm
 当前没有真实平台账号、iOS 17 设备安装或 TrollStore 共享容器验收记录。确定性的接口用例及较新 iOS 模拟器测试不能替代这些结果。早期失败与修复过程可查 Git 历史和 Actions，本页描述当前实现及其限制。
 
 ## 获取开发版 IPA
+
+当前正在补齐普通签名打包配置；以下产物名称在对应云端运行成功后才可使用，旧的 TrollStore IPA 不作为普通签名交付。
+
+- `YunX-iOS-Resign.ipa`：兼容重签包，只包含主应用，适合不处理扩展的签名工具。所有主应用功能保留；从其他应用导入链接采用复制后粘贴。
+- `YunX-iOS-Resign-Share.ipa`：保留系统分享扩展的完整重签包。签名工具需同时签主应用和 `.appex`；共享收件箱需描述文件授权对应 App Group。权限不足时扩展提供明确的复制入口。
+- 普通包只带不含固定应用标识、钥匙串组或 App Group 的中性占位签名，不能直接安装；由签名软件使用自己的有效证书、描述文件和授权权限重签。两个普通包各有独立 SHA-256，先核对下载内容再重签，重签后文件摘要会改变。
+
+共享组可通过构建设置 `YUNX_APP_GROUP_ID` 配置，或在重签前将主应用和扩展 `Info.plist` 的 `YunXAppGroupIdentifier` 同步改为签名描述文件授权的组，并在最终签名中声明它。所有声明的权限必须由描述文件授权，见 [Apple 签名说明](https://developer.apple.com/documentation/Technotes/tn3125-inside-code-signing-provisioning-profiles)。更新时保持签名身份和 Bundle ID 一致，并先导出口令保护的账号备份。
+
+工作流默认 `package_style=resign`，输出两种普通重签包；显式选 `trollstore` 或 `both` 才产生旧式安装包。iOS 更新检查按当前包的安装方式匹配资产，不把 TrollStore 包提供给普通签名用户。
 
 1. 打开上述 Actions 页面，选取 `ios-port` 分支的成功运行，核对提交号。
 2. 在 Artifacts 下载 `YunX-iOS17-TrollStore-dev`，解压得到 IPA 和 SHA-256 文件。下载 Actions 产物通常需要登录 GitHub。

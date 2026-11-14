@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import SwiftUI
 
+enum IOSPackageKind: String {
+    case resign, resignShare = "resign-share", trollStore = "trollstore"
+    static var current: Self {
+        (Bundle.main.object(forInfoDictionaryKey: "YunXInstallationStyle") as? String).flatMap(Self.init(rawValue:)) ?? .resign
+    }
+    func accepts(_ name: String) -> Bool {
+        let pattern: String
+        switch self {
+        case .resign: pattern = #"\AYunX-iOS-Resign(?:-dev)?\.ipa\z"#
+        case .resignShare: pattern = #"\AYunX-iOS-Resign-Share(?:-dev)?\.ipa\z"#
+        case .trollStore: pattern = #"\AYunX-iOS17-TrollStore(?:-[A-Za-z0-9._]+)?\.ipa\z"#
+        }
+        return name.range(of: pattern, options: .regularExpression) != nil
+    }
+}
+
 struct IOSVersion: Comparable, CustomStringConvertible {
     let major: Int; let minor: Int; let patch: Int
     init?(_ text: String, system: Bool = false) {
@@ -38,13 +54,13 @@ struct IOSUpdate: Identifiable {
     let size: Int64
     var id: String { version.description }
     var page: URL { URL(string: "https://github.com/" + Self.repository + "/releases/tag/ios-v" + version.description)! }
-    static func select(_ releases: [IOSRelease], current: IOSVersion, system: IOSVersion) throws -> Self? {
+    static func select(_ releases: [IOSRelease], current: IOSVersion, system: IOSVersion, package: IOSPackageKind = .current) throws -> Self? {
         let candidates = releases.compactMap { release -> (IOSVersion, IOSRelease)? in
             guard !release.draft, !release.prerelease, release.tag_name.hasPrefix("ios-v"), let version = IOSVersion(String(release.tag_name.dropFirst(5))), version > current else { return nil }
             return (version, release)
         }.sorted { $0.0 > $1.0 }
         guard let (version, release) = candidates.first else { return nil }
-        let assets = release.assets.filter { $0.name.range(of: #"^YunX-iOS17-TrollStore(?:-[A-Za-z0-9._]+)?\.ipa$"#, options: .regularExpression) != nil && $0.state == "uploaded" }
+        let assets = release.assets.filter { package.accepts($0.name) && $0.state == "uploaded" }
         guard assets.count == 1, let asset = assets.first, asset.size > 0, asset.size <= 512 * 1024 * 1024,
               let url = URL(string: asset.browser_download_url), url.scheme == "https", url.host?.lowercased() == "github.com", url.user == nil, url.password == nil, url.port == nil || url.port == 443,
               url.query == nil, url.fragment == nil, url.path == "/" + repository + "/releases/download/" + release.tag_name + "/" + asset.name else { throw CloudError.message("最新 iOS 发布尚未提供唯一、完整的官方安装包，请查看发布页。") }
@@ -100,8 +116,9 @@ final class IOSUpdateStore: ObservableObject {
     @Published private(set) var lastChecked: Date?
     private let client: IOSUpdateClient
     private let defaults: UserDefaults
-    init(client: IOSUpdateClient = IOSUpdateClient(), defaults: UserDefaults = .standard) {
-        self.client = client; self.defaults = defaults; automatic = defaults.bool(forKey: "automaticIOSUpdates"); lastChecked = defaults.object(forKey: "lastIOSUpdateCheck") as? Date
+    private let package: IOSPackageKind
+    init(client: IOSUpdateClient = IOSUpdateClient(), defaults: UserDefaults = .standard, package: IOSPackageKind = .current) {
+        self.client = client; self.defaults = defaults; self.package = package; automatic = defaults.bool(forKey: "automaticIOSUpdates"); lastChecked = defaults.object(forKey: "lastIOSUpdateCheck") as? Date
     }
     func check(automatic: Bool = false) async {
         guard !checking else { return }
@@ -111,7 +128,7 @@ final class IOSUpdateStore: ObservableObject {
             let releases = try await client.fetch()
             try Task.checkCancellation()
             lastChecked = Date(); defaults.set(lastChecked, forKey: "lastIOSUpdateCheck")
-            latest = try IOSUpdate.select(releases, current: .current, system: .system)
+            latest = try IOSUpdate.select(releases, current: .current, system: .system, package: package)
             if automatic {
                 if let latest, defaults.string(forKey: "ignoredIOSUpdate") != latest.id { prompt = latest }
             } else { message = latest == nil ? "没有发现比当前版本更新的正式 iOS 安装包。" : "已找到可校验的 iOS 更新。" }
@@ -150,7 +167,7 @@ struct IOSUpdatesScreen: View {
                 }
             }
             if let message { Text(message).font(.footnote) }
-            Text("自动检查默认关闭，启用后在启动时最多每 6 小时检查一次。仅识别专用 iOS 正式发布和官方 SHA-256；下载校验完成后导出 IPA，由您交给 TrollStore 安装。")
+            Text("自动检查默认关闭，启用后在启动时最多每 6 小时检查一次。仅识别与当前安装方式一致的 iOS 正式发布和官方 SHA-256；校验后导出 IPA。普通签名版本需交给签名软件或服务重新签名，TrollStore 版本使用其对应安装方式。")
                 .font(.footnote).foregroundStyle(.secondary)
         }.navigationTitle("iOS 更新").toolbar { if modal { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } } }
     }

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+    <key>YunXAppGroupIdentifier</key><string>$(YUNX_APP_GROUP_ID)</string>
+    <key>YunXShareExtensionEnabled</key><true/>
+    <key>YunXInstallationStyle</key><string>resign-share</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>用于连接您配置的局域网下载源、Tracker 或对等节点。</string>
     <key>NSPhotoLibraryAddUsageDescription</key>

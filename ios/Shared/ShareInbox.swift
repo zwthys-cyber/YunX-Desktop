@@ -21,8 +21,20 @@ enum ShareInboxError: LocalizedError {
 }
 struct ShareInbox {
     static let group = "group.io.github.zwthys.yunx"
+    static func configuredGroup(_ info: [String: Any]) -> String? {
+        if let setting = info["YunXShareExtensionEnabled"] { guard let enabled = setting as? Bool, enabled else { return nil } }
+        let value: String
+        if let setting = info["YunXAppGroupIdentifier"] { guard let name = setting as? String else { return nil }; value = name }
+        else { value = group }
+        guard value.utf8.count <= 255, value.range(of: #"\Agroup(?:\.[A-Za-z0-9][A-Za-z0-9-]*)+\z"#, options: .regularExpression) != nil else { return nil }
+        return value
+    }
+    static var container: URL? {
+        guard let value = configuredGroup(Bundle.main.infoDictionary ?? [:]) else { return nil }
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: value)
+    }
     let root: URL?
-    init(root: URL? = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: ShareInbox.group)) {
+    init(root: URL? = ShareInbox.container) {
         self.root = root?.appendingPathComponent("ShareInbox", isDirectory: true)
     }
     @discardableResult func append(_ text: String) throws -> ShareInboxItem {

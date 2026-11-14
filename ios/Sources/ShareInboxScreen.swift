@@ -31,6 +31,9 @@ final class ShareInboxModel: ObservableObject {
     private let store: ShareInbox
     init(store: ShareInbox = ShareInbox()) { self.store = store }
     func refresh() {
+        if Bundle.main.object(forInfoDictionaryKey: "YunXShareExtensionEnabled") as? Bool == false {
+            pending = []; message = nil; return
+        }
         do { pending = try store.items(); message = nil }
         catch { message = error is ShareInboxError ? error.localizedDescription : "分享收件箱无法读取，原内容已保留。" }
     }
@@ -42,6 +45,7 @@ final class ShareInboxModel: ObservableObject {
 
 @MainActor
 struct ShareInboxScreen: View {
+    private var supportsExtension: Bool { Bundle.main.object(forInfoDictionaryKey: "YunXShareExtensionEnabled") as? Bool != false }
     @ObservedObject var model: ShareInboxModel
     @ObservedObject private var navigation = AppNavigation.shared
     @State private var p2p: ShareInboxItem?
@@ -49,7 +53,7 @@ struct ShareInboxScreen: View {
     var body: some View {
         List {
             Section {
-                Text("从 Safari 或其他应用分享的链接在此等待处理。填入解析页后仍需确认解析或下载；内容会保留，处理后可左滑删除。")
+                Text(supportsExtension ? "从 Safari 或其他应用分享的链接在此等待处理。填入解析页后仍需确认解析或下载；内容会保留，处理后可左滑删除。" : "此兼容签名包可复制链接后到解析页粘贴。需要系统分享扩展时，请使用支持它的完整重签包。")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let message = model.message { Text(message).foregroundStyle(.red) }
             }
@@ -67,7 +71,7 @@ struct ShareInboxScreen: View {
                     }
                 }.swipeActions { Button("删除", role: .destructive) { model.remove(item) } }
             }
-            if model.pending.isEmpty && model.message == nil { ContentUnavailableView("分享收件箱为空", systemImage: "tray") }
+            if supportsExtension && model.pending.isEmpty && model.message == nil { ContentUnavailableView("分享收件箱为空", systemImage: "tray") }
         }.navigationTitle("分享收件箱").onAppear { model.refresh() }.refreshable { model.refresh() }
             .sheet(item: $p2p) { item in NavigationStack { P2PScreen(initialInput: item.text).toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { p2p = nil } } } } }
     }

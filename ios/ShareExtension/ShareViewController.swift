@@ -7,6 +7,7 @@ final class ShareViewController: UIViewController {
     private let preview = UITextView()
     private let status = UILabel()
     private let saveButton = UIButton(type: .system)
+    private let copyButton = UIButton(type: .system)
     private var content = ""
     private var loading: Task<Void, Never>?
     override func viewDidLoad() {
@@ -17,8 +18,10 @@ final class ShareViewController: UIViewController {
         status.text = "正在读取分享内容…"
         saveButton.setTitle("保存链接或文字", for: .normal); saveButton.isEnabled = false
         saveButton.addTarget(self, action: #selector(save), for: .touchUpInside)
+        copyButton.setTitle("复制链接并完成", for: .normal); copyButton.isEnabled = false
+        copyButton.addTarget(self, action: #selector(copyContent), for: .touchUpInside)
         let cancel = UIButton(type: .system); cancel.setTitle("取消", for: .normal); cancel.addTarget(self, action: #selector(close), for: .touchUpInside)
-        let stack = UIStackView(arrangedSubviews: [title, preview, status, saveButton, cancel]); stack.axis = .vertical; stack.spacing = 16; stack.translatesAutoresizingMaskIntoConstraints = false
+        let stack = UIStackView(arrangedSubviews: [title, preview, status, saveButton, copyButton, cancel]); stack.axis = .vertical; stack.spacing = 16; stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20), stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20), stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20), stack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20), preview.heightAnchor.constraint(greaterThanOrEqualToConstant: 120)])
         loading = Task { await read() }
@@ -54,7 +57,14 @@ final class ShareViewController: UIViewController {
             preview.text = content
             status.text = "保存后请打开云析 → 我的 → 分享收件箱。这里只保存内容，选择解析或下载后才发起网络请求。"
             saveButton.isEnabled = true
+            copyButton.isEnabled = true
         } catch { status.text = error is ShareInboxError ? error.localizedDescription : "无法读取分享内容，请改为分享链接或文字。" }
+    }
+    @objc private func copyContent() {
+        guard !content.isEmpty else { return }
+        UIPasteboard.general.string = content
+        copyButton.isEnabled = false
+        extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
     }
     @objc private func save() {
         do {

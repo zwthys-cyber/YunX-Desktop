@@ -18,13 +18,13 @@ final class IOSUpdateTests: XCTestCase {
         XCTAssertNil(IOSVersion("01.2.3")); XCTAssertNil(IOSVersion("1.2.3-beta")); XCTAssertNil(IOSVersion("9999999.0.0"))
         var desktop = Self.release("9.0.0"); desktop["tag_name"] = "v9.0.0"
         var beta = Self.release("9.0.0"); beta["prerelease"] = true
-        let update = try IOSUpdate.select(releases([desktop, beta, Self.release("0.4.0"), Self.release("0.3.1")]), current: XCTUnwrap(IOSVersion("0.3.0")), system: XCTUnwrap(IOSVersion("17.0.0")))
+        let update = try IOSUpdate.select(releases([desktop, beta, Self.release("0.4.0"), Self.release("0.3.1")]), current: XCTUnwrap(IOSVersion("0.3.0")), system: XCTUnwrap(IOSVersion("17.0.0")), package: .trollStore)
         XCTAssertEqual(update?.version.description, "0.4.0"); XCTAssertEqual(update?.sha256, String(repeating: "a", count: 64))
     }
     func testUnverifiedForeignAndIncompatiblePackagesAreRejected() throws {
         let current = IOSVersion("0.3.0")!, system = IOSVersion("17.0.0")!
         for object in [Self.release("0.4.0", digest: "missing"), Self.release("0.4.0", url: "https://github.com.evil.test/file.ipa"), Self.release("0.4.0", url: "https://github.com/another/repository/releases/download/ios-v0.4.0/YunX-iOS17-TrollStore.ipa"), Self.release("0.4.0", body: "<!-- yunx-ios-min-os: 18.0 -->"), Self.release("0.4.0", body: "<!-- yunx-ios-min-os: invalid -->")] {
-            XCTAssertThrowsError(try IOSUpdate.select(releases([object]), current: current, system: system))
+            XCTAssertThrowsError(try IOSUpdate.select(releases([object]), current: current, system: system, package: .trollStore))
         }
     }
     func testAutomaticCheckIsOptInThrottledAndNeverSendsAccountHeaders() async throws {
@@ -39,11 +39,36 @@ final class IOSUpdateTests: XCTestCase {
         }
         defer { MediaMockProtocol.handler = nil }
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MediaMockProtocol.self]; config.httpCookieStorage = nil
-        let store = IOSUpdateStore(client: IOSUpdateClient(session: URLSession(configuration: config)), defaults: defaults)
+        let store = IOSUpdateStore(client: IOSUpdateClient(session: URLSession(configuration: config)), defaults: defaults, package: .trollStore)
         await store.check(automatic: true); XCTAssertEqual(requests.total, 0)
         store.automatic = true
         await store.check(automatic: true); XCTAssertEqual(requests.total, 0)
         await store.check(); XCTAssertEqual(requests.total, 1); XCTAssertNotNil(store.latest)
         store.ignore(); XCTAssertNil(store.prompt); XCTAssertEqual(defaults.string(forKey: "ignoredIOSUpdate"), "999999.0.0")
+    }
+    func testNormalSigningPackagesAreSelectedByFlavorOnNewerSystems() throws {
+        var release = Self.release("0.4.0")
+        let names = ["YunX-iOS-Resign.ipa", "YunX-iOS-Resign-Share.ipa", "YunX-iOS17-TrollStore.ipa"]
+        release["assets"] = names.map { name in
+            ["name": name, "state": "uploaded", "size": 1024, "digest": "sha256:" + String(repeating: "a", count: 64),
+             "browser_download_url": "https://github.com/" + IOSUpdate.repository + "/releases/download/ios-v0.4.0/" + name] as [String: Any]
+        }
+        let list = try releases([release]), current = IOSVersion("0.3.0")!, system = IOSVersion("27.0.1")!
+        for (kind, name) in zip([IOSPackageKind.resign, .resignShare, .trollStore], names) {
+            XCTAssertEqual(try IOSUpdate.select(list, current: current, system: system, package: kind)?.filename, name)
+        }
+    }
+    func testNormalSigningNeverFallsBackToTrollStoreOrAmbiguousAssets() throws {
+        let current = IOSVersion("0.3.0")!, system = IOSVersion("27.0.1")!
+        XCTAssertThrowsError(try IOSUpdate.select(releases([Self.release("0.4.0")]), current: current, system: system, package: .resign))
+        XCTAssertFalse(IOSPackageKind.resign.accepts("YunX-iOS-Resign-Share.ipa"))
+        XCTAssertFalse(IOSPackageKind.resignShare.accepts("YunX-iOS-Resign.ipa"))
+        XCTAssertFalse(IOSPackageKind.resign.accepts("YunX-iOS-Resign.ipa\n"))
+        var duplicate = Self.release("0.4.0")
+        duplicate["assets"] = ["YunX-iOS-Resign.ipa", "YunX-iOS-Resign-dev.ipa"].map { name in
+            ["name": name, "state": "uploaded", "size": 1024, "digest": "sha256:" + String(repeating: "a", count: 64),
+             "browser_download_url": "https://github.com/" + IOSUpdate.repository + "/releases/download/ios-v0.4.0/" + name] as [String: Any]
+        }
+        XCTAssertThrowsError(try IOSUpdate.select(releases([duplicate]), current: current, system: system, package: .resign))
     }
 }

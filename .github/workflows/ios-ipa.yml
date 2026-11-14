@@ -9,6 +9,11 @@ on:
       - '.github/workflows/ios-ipa.yml'
   workflow_dispatch:
     inputs:
+      package_style:
+        description: IPA installation format
+        type: choice
+        default: resign
+        options: [resign, trollstore, both]
       macos_runner:
         description: GitHub standard macOS runner
         type: choice
@@ -159,6 +164,8 @@ jobs:
           bash ios/test-ios.sh run 2>&1 | tee ios/build/tests.log
 
       - name: Compile and package IPA
+        env:
+          YUNX_PACKAGE_STYLE: ${{ inputs.package_style || 'resign' }}
         shell: bash
         run: |
           set -o pipefail
@@ -169,7 +176,7 @@ jobs:
         id: ipa
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: YunX-iOS17-TrollStore-dev
+          name: YunX-iOS-${{ inputs.package_style || 'resign' }}-dev
           path: |
             ios/build/*.ipa
             ios/build/*.sha256
@@ -204,11 +211,12 @@ jobs:
           ARTIFACT_URL: ${{ steps.ipa.outputs.artifact-url }}
         run: |
           {
-            echo '### YunX iOS 17 development IPA'
+            echo '### YunX iOS development IPA'
             echo
             echo "Download: $ARTIFACT_URL"
             echo
-            echo 'arm64 device build; iOS 17.0 minimum; ad-hoc signed for TrollStore installation.'
-            echo 'Development port: Quark/UC share and personal-folder browsing, web login, and single-file downloads. Bilibili single-file video and Pixiv images are also integrated; other providers, DASH/HLS and P2P remain incomplete.'
+            echo 'arm64 device build; iOS 17.0 minimum. Default outputs are IPAs for the user to re-sign with a valid certificate and provisioning profile.'
+            echo 'Resign: compatibility package without the share extension. Resign-Share: full package; sign the app and extension and configure matching App Groups for the shared inbox.'
+            echo 'The explicit TrollStore format remains optional. See ios/PORTING.md for current feature and device acceptance status.'
             echo 'Compilation/package checks do not verify installation or runtime on a real device.'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -9,6 +9,16 @@ private final class InboxWrites: @unchecked Sendable {
 }
 @MainActor
 final class ShareInboxTests: XCTestCase {
+    func testSigningCanConfigureOrDisableTheSharedContainerWithoutAcceptingInvalidIDs() {
+        XCTAssertEqual(ShareInbox.configuredGroup([:]), ShareInbox.group)
+        XCTAssertEqual(ShareInbox.configuredGroup(["YunXAppGroupIdentifier": "group.example.signed-yunx"]), "group.example.signed-yunx")
+        XCTAssertNil(ShareInbox.configuredGroup(["YunXShareExtensionEnabled": false]))
+        XCTAssertNil(ShareInbox.configuredGroup(["YunXAppGroupIdentifier": true]))
+        XCTAssertNil(ShareInbox.configuredGroup(["YunXShareExtensionEnabled": "false"]))
+        for value in ["", "../outside", "group..bad", "group.example/escape", "$(UNEXPANDED)", "group.bad\n"] {
+            XCTAssertNil(ShareInbox.configuredGroup(["YunXAppGroupIdentifier": value]))
+        }
+    }
     func testSharedQueueSurvivesReopenAndDeletesOnlySelectedRecord() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
