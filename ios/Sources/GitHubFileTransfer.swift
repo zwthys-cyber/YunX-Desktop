@@ -11,13 +11,15 @@ struct GitHubTransferChoice {
 }
 
 struct GitHubTransferSettings: View {
+    @AppStorage(ManagedHTTPPolicy.preference) private var unifiedNative = false
+    @AppStorage("engineHTTPRateKiB") private var sharedRate = 0
     @AppStorage("githubNativeHTTP") private var native = false
     @AppStorage("githubHTTPConnections") private var connections = 4
     var body: some View {
         Section("GitHub 文件传输") {
             Toggle("原生多连接（前台、官方源）", isOn: $native)
             if native { Stepper("GitHub 每文件：\(connections) 个连接", value: $connections, in: 1...512) }
-            Text(native ? "使用原生 HTTP 限速与代理，账号请求头经钥匙串提供。任务在「下载 → 原生引擎任务」查看；此模式不走下载镜像。m3u8 原文请使用系统模式保存。" : "使用系统会话，保留现有镜像与后台策略；带账号请求头的文件使用前台会话。")
+            Text(native ? "使用原生 HTTP 限速与代理，账号请求头经钥匙串提供。任务在「下载 → 原生引擎任务」查看；此模式不走下载镜像。m3u8 原文请使用系统模式保存。" : (unifiedNative || sharedRate > 0 ? "普通队列的原生校验或共享限速已启用：文件从官方源以前台原生方式下载，仍在普通下载页查看，不使用镜像或系统断点。" : "使用系统会话，保留现有镜像与后台策略；带账号请求头的文件使用前台会话。"))
                 .font(.footnote).foregroundStyle(.secondary)
         }.onAppear { if !(1...512).contains(connections) { connections = 4 } }
     }
@@ -62,7 +64,7 @@ enum GitHubFileTransfer {
         }
         var url = plan.url
         var origin: URL?
-        if mirrors {
+        if mirrors && !ManagedHTTPPolicy.preferred {
             let routed = try await GitHubMirrorSelector.shared.plan(plan)
             url = routed.url; origin = routed.origin
         }

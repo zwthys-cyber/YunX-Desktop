@@ -276,6 +276,14 @@ final class DownloadStore: NSObject, ObservableObject, URLSessionDownloadDelegat
             }
         }
         if items[index].nativeTransfer == true || (nativeEnabled && ManagedHTTPPolicy.preferred) {
+            // A newly selected native transfer uses the official GitHub source,
+            // matching the dedicated native GitHub mode. Keep the old system
+            // resume archive until publication; it is never consumed by Go.
+            if items[index].nativeTransfer != true, items[index].requiresHeaders != true,
+               let origin = items[index].originFallback, GitHubMirrorPolicy.publicOrigin(origin) {
+                items[index].url = origin
+                items[index].originFallback = nil
+            }
             items[index].nativeTransfer = true
             items[index].backgroundTransfer = false
             items[index].state = .downloading
